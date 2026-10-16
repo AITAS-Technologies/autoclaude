@@ -6,6 +6,7 @@ const cfg: GuardConfig = {
   forbiddenPaths: ["tools/engine/**", ".autoclaude/config.json", ".github/workflows/**"],
   fenceAllow: [],
   worktree: "/work/tree",
+  platform: "linux",
 };
 
 /** The payload Claude Code's PreToolUse hook receives for a Bash call. */
@@ -37,6 +38,9 @@ describe("claudeHook", () => {
     expect(hook("git rm tools/engine/x.ts", { ...cfg, forbiddenPaths: [] }).exit).toBe(0);
   });
 
+  // Changed from the source, whose half config lacked branch names and labels: the guard's
+  // config is now `GuardConfig` (forbidden paths, fence prefixes, worktree), the "project
+  // config" of design § 7.5's guard, so the half config lacks one of those instead.
   it("refuses git when the config is an object but not a config", () => {
     const half = { fenceAllow: [] } as unknown as GuardConfig;
     const r = hook("git push origin trunk", half);
@@ -124,9 +128,10 @@ describe("claudeHook fails closed", () => {
       expect(hook(c, null as unknown as GuardConfig).exit, c).toBe(2);
   });
 
-  // The source read its config from a file and refused git and gh when it could not, while
-  // a command that needs no config still ran. The file is the `autoclaude guard` verb's to
-  // read now; a config with nothing in it is what reaches this function in that case.
+  // Changed from the source, which read its config from a file and refused git and gh when
+  // it could not, while a command that needs no config still ran. Design § 7.5: the hook is
+  // `autoclaude guard --runtime <r>`, which reads the config and fails closed itself; a
+  // config with nothing in it is what reaches this function in that case.
   it("blocks git and gh when the config carries nothing, and lets through what needs none", () => {
     const empty = {} as unknown as GuardConfig;
     expect(hook("git push origin agent/1-x", empty).exit).toBe(2);
@@ -149,7 +154,20 @@ describe("claudeHook fails closed", () => {
   // Global constraint: every parser accepts CRLF and a leading UTF-8 BOM.
   it("reads a payload with a leading BOM and CRLF line ends", () => {
     const crlf = JSON.stringify(JSON.parse(payload("git status")), null, 2).replace(/\n/g, "\r\n");
-    expect(claudeHook(`﻿${crlf}`, cfg)).toEqual({ exit: 0, stderr: "" });
-    expect(claudeHook(`﻿${payload("gh pr list")}`, cfg).exit).toBe(2);
+    expect(claudeHook("\uFEFF" + crlf, cfg)).toEqual({ exit: 0, stderr: "" });
+    expect(claudeHook("\uFEFF" + payload("gh pr list"), cfg).exit).toBe(2);
+  });
+
+  // Claude Code's Bash tool keeps its directory between calls, and the payload says where
+  // that is: a relative path is placed from there, not from the worktree's root.
+  it("places the command from the payload's cwd", () => {
+    const inTools = { cwd: "/work/tree/tools" };
+    expect(claudeHook(payload("echo x > engine/x.ts", inTools), cfg).exit).toBe(2);
+    expect(claudeHook(payload("echo x > engine/x.ts"), cfg).exit).toBe(0);
+    expect(claudeHook(payload("git status", inTools), cfg).exit).toBe(0);
+    expect(claudeHook(payload("git status", { cwd: "/elsewhere" }), cfg).exit).toBe(2);
+    const bad = claudeHook(payload("npm test", { cwd: 7 }), cfg);
+    expect(bad.exit).toBe(2);
+    expect(bad.stderr).toMatch(/cwd is not a path/);
   });
 });

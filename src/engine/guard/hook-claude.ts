@@ -40,6 +40,10 @@ function block(reason: string): HookVerdict {
  * another shell would be decided about text that shell reads differently — the source's
  * hook was attached to PowerShell as well (defect 5); a payload for any other tool is
  * refused here, whatever the hook's matcher says.
+ *
+ * The payload's `cwd` is where the shell stands: Claude Code's Bash tool keeps its
+ * directory between calls, so a `cd tools` in one call moves the next one, and a relative
+ * path in it is placed from there.
  */
 export function claudeHook(stdin: string, cfg: GuardConfig): HookVerdict {
   try {
@@ -54,9 +58,14 @@ export function claudeHook(stdin: string, cfg: GuardConfig): HookVerdict {
     }
     if (!payload || typeof payload !== "object" || Array.isArray(payload))
       return block("the payload is not a JSON object");
-    const { tool_name: tool, tool_input: input } = payload as {
+    const {
+      tool_name: tool,
+      tool_input: input,
+      cwd,
+    } = payload as {
       tool_name?: unknown;
       tool_input?: unknown;
+      cwd?: unknown;
     };
     if (tool !== "Bash")
       return block(
@@ -65,8 +74,10 @@ export function claudeHook(stdin: string, cfg: GuardConfig): HookVerdict {
     const command =
       input && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
     if (typeof command !== "string") return block("the payload carries no command string");
-    const reason = refusalFor(command, cfg);
-    if (reason) return block(reason);
+    if (cwd !== undefined && typeof cwd !== "string")
+      return block("the payload's cwd is not a path, so the guard cannot place the command");
+    const reason = refusalFor(command, cfg, cwd);
+    if (reason !== null) return block(reason);
     return { exit: 0, stderr: "" };
   } catch (error) {
     return block(`the guard itself failed (${describe(error)})`);

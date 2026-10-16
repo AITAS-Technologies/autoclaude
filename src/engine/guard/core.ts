@@ -25,9 +25,14 @@
  *     gates`; the engine's other verbs are the engine's own (design § 6, C6);
  *   - for git: arguments the shell would still expand, global options, subcommands and
  *     `-c` keys outside an allowlist, config writes, `rebase --exec`, `reset --hard`,
- *     the pathspecs `add|rm|mv|checkout|restore` may name, and the reads and stashes
- *     that would print a secret;
- *   - a shell redirection into a forbidden path or out of the worktree.
+ *     a branch reset (`branch -D|-M|-f`, `checkout -B`, `switch -C`), the pathspecs
+ *     `add|rm|mv|checkout|restore` may name, and the reads and stashes that would print a
+ *     secret;
+ *   - a program the shell decides (an expansion, a substitution or a glob in the program's
+ *     own token), and a wrapper flag that hands the command to a split string, a shell or
+ *     another directory (`env -S`, `sudo -s`, `env -C`);
+ *   - a shell redirection that writes outside the worktree or into a forbidden path, and a
+ *     `cd`/`pushd` that leaves the worktree.
  *
  * This is a fence, not a sandbox: it reads text, and a test file the agent writes can
  * spawn anything. It raises the cost of a mistake; the review of every pull request
@@ -38,14 +43,18 @@ import { matchesAny } from "../../config/globs.js";
 /**
  * What the guard is handed, built by the entry point from the project's `ProjectConfig`
  * and the stage's worktree: `forbiddenPaths` and `fence.allow` from the project, and the
- * worktree the stage runs in. No rule ported from the source reads the worktree's path:
- * the path checks read a path as typed and refuse one that climbs out with `..`; an
- * absolute path is not compared with the worktree.
+ * worktree the stage runs in, as an absolute path. A redirection, a `cd` and a git
+ * pathspec are placed against the worktree: whatever lands outside it is refused.
+ *
+ * `platform` says whose path rules apply — the drive spellings and the case folding of
+ * Windows and macOS — and defaults to this process's. The rules are pure string logic, so
+ * a test can ask for another OS's.
  */
 export interface GuardConfig {
   forbiddenPaths: string[];
   fenceAllow: string[];
   worktree: string;
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -58,6 +67,8 @@ export interface GuardConfig {
  */
 let configSource: unknown = null;
 let config: GuardConfig | null = null;
+/** The directory the shell stands in when the command starts, when the caller knows it. */
+let startDir: string | undefined;
 
 const isStrings = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -71,13 +82,19 @@ function projectConfig(): GuardConfig {
   } else {
     if (!isStrings(c.forbiddenPaths)) missing.push("forbiddenPaths");
     if (!isStrings(c.fenceAllow)) missing.push("fenceAllow");
-    if (typeof c.worktree !== "string") missing.push("worktree");
+    const platform = c.platform === undefined ? process.platform : c.platform;
+    if (typeof platform !== "string") missing.push("platform");
+    else if (
+      typeof c.worktree !== "string" ||
+      placePath(c.worktree, null, platform as NodeJS.Platform) === null
+    )
+      missing.push("worktree (an absolute path)");
   }
   // The two lists are read further down, and a missing one must not read as an empty
-  // fence: `forbiddenPaths ?? []` would let `git rm` on the engine's own files through.
-  // The worktree is checked with them, so a config the entry point built wrong fails here
-  // as a whole. Throwing is the whole difference: the hook's outer catch turns it into
-  // exit 2, and a driver sees an error instead of a verdict.
+  // fence: `forbiddenPaths ?? []` would let `git rm` on the engine's own files through;
+  // the worktree is what every path is placed against. Throwing is the whole difference:
+  // the hook's outer catch turns it into exit 2, and a driver sees an error instead of a
+  // verdict.
   if (missing.length) {
     config = null;
     throw new TypeError(
@@ -97,7 +114,14 @@ const OPERATOR_CHARS = ";|&()<>\n";
 /** One word as the shell will read it, and whether the shell still decides its value. */
 interface Token {
   text: string;
+  /** An unquoted `$`, a substitution, an unquoted brace or a leading `~`. */
   dynamic: boolean;
+  /** Where in `text` the first part the shell decides begins. */
+  dynamicAt?: number;
+  /** An unquoted `*` or `?`: a glob the shell expands. */
+  glob?: boolean;
+  /** An unquoted `[`, which opens a glob class when a `]` follows it. */
+  bracket?: boolean;
 }
 
 /** One simple command: its tokens, and the targets its redirections write. */
@@ -123,10 +147,13 @@ function tokenize(command: string): Segment[] {
   const open = () => {
     if (!cur) cur = { text: "", dynamic: false };
   };
-  const add = (ch: string, dynamic = false) => {
+  const add = (ch: string, dynamic = false, unquoted = false) => {
     open();
+    if (dynamic && !cur!.dynamic) cur!.dynamicAt = cur!.text.length;
     cur!.text += ch;
     if (dynamic) cur!.dynamic = true;
+    if (unquoted && (ch === "*" || ch === "?")) cur!.glob = true;
+    if (unquoted && ch === "[") cur!.bracket = true;
   };
   const endToken = () => {
     if (cur) seg.push(cur);
@@ -134,7 +161,9 @@ function tokenize(command: string): Segment[] {
   };
   const endSegment = () => {
     endToken();
-    if (seg.length) {
+    // A redirection with no command (`> file`, `true && > file`) still truncates the file,
+    // so a segment with writes and no tokens is kept.
+    if (seg.length || segWrites.length) {
       // A property on the array, so every existing `seg.map(t => t.text)` still works.
       seg.writes = segWrites;
       segments.push(seg);
@@ -220,20 +249,26 @@ function tokenize(command: string): Segment[] {
   }
 
   /**
-   * A redirection: `>`, `>>`, `2>&1`, `<`, `&>`. The fd in front is dropped; the target of a
-   * *write* is kept, because a shell redirection writes a file and no `Edit(...)` permission
-   * rule binds Bash. Without it, `echo x > <a forbidden path>` and then running what it
-   * wrote are two permitted commands — write and execute, straight past the fence that
-   * exists to keep the engine's own code out of an agent's reach.
+   * A redirection: `>`, `>>`, `>|`, `<>`, `2>&1`, `<`, and (from the caller) `&>`, `&>>`.
+   * The fd in front is dropped; the target of a *write* is kept, because a shell
+   * redirection writes a file and no `Edit(...)` permission rule binds Bash. Without it,
+   * `echo x > <a forbidden path>` and then running what it wrote are two permitted
+   * commands — write and execute, straight past the fence that exists to keep the engine's
+   * own code out of an agent's reach. `>&2`, `2>&1` and `>&-` duplicate or close a
+   * descriptor and write no file; `>& file` does write one.
    */
-  function redirection() {
-    if (cur && /^\d+$/.test((cur as Token).text)) cur = null;
+  function redirection(dropFd = true) {
+    if (dropFd && cur && /^\d+$/.test((cur as Token).text)) cur = null;
     endToken();
-    const write = command[i] === ">";
+    const write = command[i] === ">" || (command[i] === "<" && command[i + 1] === ">");
     i++;
-    while (i < n && (command[i] === ">" || command[i] === "&" || command[i] === "|")) i++;
+    let dup = false;
+    while (i < n && (command[i] === ">" || command[i] === "&" || command[i] === "|")) {
+      if (command[i] === "&") dup = true;
+      i++;
+    }
     const target = readWord();
-    if (write && target) segWrites.push(target);
+    if (write && target && !(dup && /^(\d+|-)$/.test(target))) segWrites.push(target);
   }
 
   while (i < n) {
@@ -321,6 +356,13 @@ function tokenize(command: string): Segment[] {
       i = nested(i + 1, "`");
       continue;
     }
+    if (c === "&" && command[i + 1] === ">") {
+      // `&>file` and `&>>file` write stdout and stderr to the file. Read as the operator
+      // `&`, they ended the segment and the write landed in an empty one, which was dropped.
+      i++;
+      redirection(false);
+      continue;
+    }
     if (";|&()".includes(c)) {
       endSegment();
       i++;
@@ -331,7 +373,7 @@ function tokenize(command: string): Segment[] {
       i++;
       continue;
     }
-    add(c);
+    add(c, false, true);
     i++;
   }
   endSegment();
@@ -345,6 +387,15 @@ function tokenize(command: string): Segment[] {
 /** `git`, `git.exe`, `/usr/bin/git`, `C:\Program Files\Git\bin\git.exe` are all git. */
 function program(text: string): string {
   return (text.split(/[\\/]/).pop() ?? "").toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
+}
+
+/**
+ * Whether the shell rather than the text decides what a token is: an expansion or a
+ * substitution in it, or an unquoted glob — `*`, `?`, or a `[` with a `]` after it (a lone
+ * `[` is the test command).
+ */
+function unreadable(t: Token): boolean {
+  return t.dynamic || t.glob === true || (t.bracket === true && /\[.*\]/.test(t.text));
 }
 
 /** Programs that run a command the guard cannot read; refused outright. */
@@ -448,6 +499,53 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * `git` there would hide the program the guard exists to read — so the duration test
  * decides it rather than the position.
  */
+/**
+ * Wrapper flags that hand the command to something the guard cannot follow: a string split
+ * into a command (`env -S`), a shell that re-reads it (`sudo -s`, `sudo -i`, `doas -s`), or
+ * another directory or root (`env -C`, `sudo -D`, `sudo -R`). `short` are the flag letters,
+ * in a bundle too; a letter in `values` takes the rest of its bundle as its value. A long
+ * option is refused by any prefix getopt would accept for it (`--split`, `--sh`).
+ */
+const WRAPPER_DANGER: Record<
+  string,
+  { short: string; values: string; long: string[] } | undefined
+> = {
+  env: { short: "SC", values: "uPa", long: ["--split-string", "--chdir"] },
+  sudo: {
+    short: "siDR",
+    values: "ugpCUhrtT",
+    long: ["--shell", "--login", "--chdir", "--chroot"],
+  },
+  doas: { short: "s", values: "uC", long: [] },
+};
+
+function wrapperDanger(p: string, seg: Segment, from: number, spec: WrapperSpec): string | null {
+  const danger = WRAPPER_DANGER[p];
+  if (!danger) return null;
+  const hits = (flag: string): boolean => {
+    if (flag.startsWith("--")) {
+      const name = flag.split("=")[0]!;
+      return name.length >= 3 && danger.long.some((l) => l.startsWith(name));
+    }
+    for (const ch of flag.slice(1)) {
+      if (danger.short.includes(ch)) return true;
+      if (danger.values.includes(ch)) return false; // the rest of the bundle is its value
+    }
+    return false;
+  };
+  // The same walk over the wrapper's flags as `afterWrapperArgs`, values skipped.
+  let k = from;
+  while (k < seg.length && seg[k]!.text.startsWith("-")) {
+    const flag = seg[k]!.text;
+    k++;
+    if (flag === "--") break;
+    if (hits(flag))
+      return `${p} ${flag} hands the command to a split string, a shell or another directory, which the guard cannot follow`;
+    if (spec.value.includes(flag) && k < seg.length) k++;
+  }
+  return null;
+}
+
 function afterWrapperArgs(seg: Segment, from: number, spec: WrapperSpec): number {
   let i = from;
   while (i < seg.length && seg[i]!.text.startsWith("-")) {
@@ -498,26 +596,42 @@ function invocation(seg: Segment): Invocation | { refusal: string } | null {
   let wrapperAt = -1;
   for (;;) {
     if (i >= seg.length) return null;
-    const t = seg[i]!.text;
-    if (ASSIGNMENT.test(t)) {
+    const tok = seg[i]!;
+    const t = tok.text;
+    // An assignment has a literal name before its `=`. One the shell assembles
+    // (`$(printf 'git push ')x=1`) is a command word, which word splitting may turn into
+    // any program at all.
+    if (ASSIGNMENT.test(t) && !(tok.dynamic && (tok.dynamicAt ?? 0) <= t.indexOf("="))) {
       assigns.push(t);
       i++;
       continue;
     }
-    const p = program(t);
-    if (WRAPPER_KEYWORDS.has(p)) {
-      i++;
-      continue;
-    }
-    const spec = WRAPPER_ARGS[p];
-    if (spec) {
-      if (wrapperAt < 0) wrapperAt = i;
-      i = afterWrapperArgs(seg, i + 1, spec);
-      continue;
+    // A keyword or a wrapper only as typed: `env$(printf ' bash -c evil')` reads as `env`
+    // and is not one. The brace group's `{` and `}` are marked dynamic and are keywords.
+    if (!unreadable(tok) || t === "{" || t === "}") {
+      const p = program(t);
+      if (WRAPPER_KEYWORDS.has(p)) {
+        i++;
+        continue;
+      }
+      const spec = WRAPPER_ARGS[p];
+      if (spec) {
+        const danger = wrapperDanger(p, seg, i + 1, spec);
+        if (danger) return { refusal: danger };
+        if (wrapperAt < 0) wrapperAt = i;
+        i = afterWrapperArgs(seg, i + 1, spec);
+        continue;
+      }
     }
     break;
   }
   const token = seg[i]!;
+  // The program the shell assembles is no program the guard can name: `$(echo git) push`,
+  // `g=git; $g push`, `$'git' push` and `/usr/bin/g?t push` all run git.
+  if (unreadable(token))
+    return {
+      refusal: `the program "${token.text}" is decided by the shell (an expansion, a substitution or a glob); name the program`,
+    };
   const p = program(token.text);
   // Behind a wrapper, only a program this file has a fence for may run: a shell is
   // refused by `SHELLS` below, an assignment by the fence above it, and anything else is
@@ -534,6 +648,180 @@ function invocation(seg: Segment): Invocation | { refusal: string } | null {
     };
   }
   return { assigns, program: p, token, args: seg.slice(i + 1) };
+}
+
+// ---------------------------------------------------------------------------
+// Where a path lands
+// ---------------------------------------------------------------------------
+
+/** Whether the platform's file systems fold case: Windows and macOS do by default. */
+const foldsCase = (platform: NodeJS.Platform): boolean =>
+  platform === "win32" || platform === "darwin";
+
+/** Whether a path is absolute on the platform, however it is spelled there. */
+function isAbsolutePath(path: string, platform: NodeJS.Platform): boolean {
+  return platform === "win32" ? /^([a-zA-Z]:|[\\/])/.test(path) : path.startsWith("/");
+}
+
+/**
+ * A path made absolute and normal the way the guard compares paths: forward slashes,
+ * `.` and repeated separators dropped, `..` applied, case folded where the platform folds
+ * it, and on Windows the drive written `c:/…` whichever of `C:\…`, `C:/…` or Git Bash's
+ * `/c/…` was typed. A relative path is taken from `base`, itself a placed path.
+ *
+ * `null` when the location cannot be read: a relative path with no base, a drive-relative
+ * `C:x`, or on Windows a Git Bash path such as `/tmp` or `/usr`, which lands in the Git
+ * installation rather than anywhere the guard can name.
+ */
+function placePath(path: string, base: string | null, platform: NodeJS.Platform): string | null {
+  const p = path.replace(/\\/g, "/");
+  let root: string;
+  let rest: string;
+  let m: RegExpMatchArray | null;
+  if (platform === "win32" && (m = p.match(/^([a-zA-Z]):\/(.*)$/))) {
+    root = `${m[1]!.toLowerCase()}:/`;
+    rest = m[2]!;
+  } else if (platform === "win32" && (m = p.match(/^\/(?:cygdrive\/)?([a-zA-Z])(?:\/(.*))?$/))) {
+    root = `${m[1]!.toLowerCase()}:/`;
+    rest = m[2] ?? "";
+  } else if (platform === "win32" && p.startsWith("//")) {
+    root = "//";
+    rest = p.slice(2);
+  } else if (platform === "win32" && /^([a-zA-Z]:|\/)/.test(p)) {
+    return null;
+  } else if (platform !== "win32" && p.startsWith("/")) {
+    root = "/";
+    rest = p.slice(1);
+  } else {
+    return base === null ? null : placePath(`${base}/${p}`, null, platform);
+  }
+  const out: string[] = [];
+  for (const s of rest.split("/")) {
+    if (s === "" || s === ".") continue;
+    if (s === "..") out.pop();
+    else out.push(s);
+  }
+  const placed = root + out.join("/");
+  return foldsCase(platform) ? placed.toLowerCase() : placed;
+}
+
+/** A placed path relative to the placed worktree: "" for the worktree itself, null outside it. */
+function inWorktree(path: string, worktree: string): string | null {
+  if (path === worktree) return "";
+  const prefix = worktree.endsWith("/") ? worktree : `${worktree}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
+}
+
+/** `cd`, `pushd` and `popd`: the builtins that move the shell. */
+const MOVES = new Set(["cd", "pushd", "popd"]);
+
+/** The words that make part of a command run more than once: a loop, or a function. */
+const REPEATS = new Set(["for", "while", "until", "select", "function"]);
+
+/** How many directories the guard follows a command through before it stops trying. */
+const MAX_PLACES = 64;
+
+/** Where a command may run, worked out once per command. */
+interface Places {
+  platform: NodeJS.Platform;
+  /** The worktree, placed. */
+  worktree: string;
+  /**
+   * Every directory the shell may stand in while the command runs, placed: the one it
+   * starts in and each one a `cd` or `pushd` in the command may take it to; null for one
+   * the guard cannot read.
+   */
+  dirs: Array<string | null>;
+  /** Why a `cd`, `pushd` or `popd` segment is refused. */
+  moves: Map<Segment, string>;
+}
+
+/**
+ * The directories a command may run in.
+ *
+ * The guard decides every segment on its own, but a `cd` moves every segment after it:
+ * `cd tools && echo x > engine/x.ts` writes `tools/engine/x.ts`, and a relative path is
+ * only placed against the directory the shell stands in. So the directory changes are
+ * read first, and each later path is placed against **every** directory the shell may be
+ * in by then: the start, and each `cd`/`pushd` target taken from each of those. That is an
+ * over-approximation on purpose — a `cd` in a subshell, after `||`, or that fails, leaves
+ * the shell where it was, and that place is in the set as well.
+ *
+ * Refused, because no single place follows from them: a target the shell decides (`cd
+ * $DIR`, `cd ~`, `cd -`, a bare `cd`, which goes home), one that lands outside the
+ * worktree, `pushd` without a directory or with `+N`/`-N`, a `popd` with nothing this
+ * command pushed, and a relative target in a command with a loop or a function, where it
+ * may apply more than once. `CDPATH` is not read; the stage's environment is expected not
+ * to set it.
+ */
+function places(segments: Segment[], command: string): Places {
+  const cfg = projectConfig();
+  const platform = cfg.platform ?? process.platform;
+  const worktree = placePath(cfg.worktree, null, platform)!;
+  const start = startDir === undefined ? worktree : placePath(startDir, null, platform);
+  const dirs: Array<string | null> = [start];
+  const moves = new Map<Segment, string>();
+  const repeats =
+    /\(\s*\)/.test(command) ||
+    segments.some((s) => s.some((t) => !t.dynamic && REPEATS.has(t.text)));
+  let pushed = 0;
+  for (const seg of segments) {
+    const inv = invocation(seg);
+    if (!inv || "refusal" in inv || !MOVES.has(inv.program)) continue;
+    const verb = inv.program;
+    const args = inv.args;
+    let k = 0;
+    while (k < args.length && /^-[LPe@n]+$/.test(args[k]!.text)) k++;
+    if (args[k]?.text === "--") k++;
+    const target = args[k];
+    const refuse = (why: string) => moves.set(seg, `${verb} ${why}; stay inside the worktree`);
+    if (verb === "popd") {
+      if (target) refuse(`${target.text} reaches into a directory stack the guard does not follow`);
+      else if (pushed === 0)
+        refuse("returns to a directory pushed before this command, which the guard cannot place");
+      else pushed--;
+      continue;
+    }
+    if (!target) {
+      refuse(
+        verb === "cd"
+          ? "without a directory goes home"
+          : "without a directory swaps to one pushed before this command",
+      );
+      continue;
+    }
+    const t = target.text;
+    if (t === "-") {
+      refuse("- returns to the previous directory, which may be anywhere");
+      continue;
+    }
+    if (verb === "pushd" && /^[+-]\d+$/.test(t)) {
+      refuse(`${t} rotates a directory stack the guard does not follow`);
+      continue;
+    }
+    if (unreadable(target) || /[~$`*?[\]{}]/.test(t)) {
+      refuse(`${t}: the shell decides where that is`);
+      continue;
+    }
+    if (repeats && !isAbsolutePath(t, platform)) {
+      refuse(
+        `${t}: a relative directory in a command with a loop or a function may apply more than once; use the absolute path`,
+      );
+      continue;
+    }
+    const reached = dirs.map((d) => (d === null ? null : placePath(t, d, platform)));
+    if (reached.some((d) => d === null || inWorktree(d, worktree) === null)) {
+      refuse(`${t} leaves the worktree, or goes where the guard cannot place it`);
+      continue;
+    }
+    for (const d of reached) if (!dirs.includes(d)) dirs.push(d);
+    if (dirs.length > MAX_PLACES) {
+      refuse(`${t}: the command changes directory more often than the guard follows`);
+      continue;
+    }
+    if (verb === "pushd") pushed++;
+  }
+  return { platform, worktree, dirs, moves };
 }
 
 // ---------------------------------------------------------------------------
@@ -679,6 +967,12 @@ function isSecretFile(path: string): boolean {
  * `add` is on the list for its literal paths only, and deliberately not as a verb that
  * rolls back: `git add -A` and `git add .` are the everyday commit path and stay
  * permitted, while `git add <a forbidden path>` is refused the way `git rm` on it is.
+ *
+ * git reads a pathspec from the directory the shell stands in, so each one is placed
+ * against every directory the command may run in (`cd tools && git rm engine/x.ts`), an
+ * absolute one against the worktree, and on Windows and macOS with case folded. A magic
+ * pathspec is refused for every verb: `:/` and `:(top)` read from the top of the
+ * repository, whichever directory the shell is in, and `:(icase)` folds case.
  */
 /**
  * A pathspec as git will read it, not as it was typed.
@@ -696,7 +990,7 @@ function normalizePathspec(p: string): string {
     .join("/");
 }
 
-function checkFencedPaths(sub: string, rest: string[]): string | null {
+function checkFencedPaths(sub: string, rest: string[], pl: Places): string | null {
   const dashdash = rest.indexOf("--");
   const positionals = rest.filter(
     (a, i) => i !== dashdash && (i > dashdash && dashdash >= 0 ? true : !a.startsWith("-")),
@@ -707,28 +1001,43 @@ function checkFencedPaths(sub: string, rest: string[]): string | null {
     sub === "mv" ||
     (sub === "checkout" && (before.length >= 1 || (dashdash < 0 && positionals.length >= 2))) ||
     (sub === "restore" && rest.some((a) => /^(--source(=|$)|-s$|-s.)/.test(a)));
-  const forbidden = projectConfig().forbiddenPaths ?? [];
+  const fold = (s: string) => (foldsCase(pl.platform) ? s.toLowerCase() : s);
+  const forbidden = (projectConfig().forbiddenPaths ?? []).map(fold);
   // The literal directory in front of each glob: `tools/engine/**` guards `tools/engine`.
   const roots = forbidden.map((g) => g.split("*")[0]!.replace(/\/$/, "")).filter(Boolean);
   // The file is read by git, not by the guard, so its contents cannot be checked at all.
   const fromFile = rest.find((a) => /^--pathspec-from-file(=|$)|^--pathspec-file-nul$/.test(a));
   if (fromFile) return `git ${sub} ${fromFile}: the paths come from a file the guard cannot read`;
   const paths = dashdash >= 0 ? rest.slice(dashdash + 1) : positionals;
+  // Where the shell may stand, relative to the worktree: `checkSegment` has refused git
+  // already if any of them lies outside it.
+  const prefixes = pl.dirs.map((d) => inWorktree(d as string, pl.worktree) as string);
   for (const a of paths) {
     if (/(^|[\\/])\.\.([\\/]|$)/.test(a))
       return `git ${sub} ${a}: a path outside the worktree is not readable here`;
-    const path = normalizePathspec(a);
-    if (matchesAny(path, forbidden))
-      return `git ${sub} would change ${a}, a forbidden path (config.forbiddenPaths)`;
-    if (isSecretFile(path))
-      return `git ${sub} names ${a}, a secret the session may not read or stage (the settings deny reading and editing the .env files; this is the same fence on git's side)`;
-    if (!rollsBack) continue;
     if (a.startsWith(":"))
       return `git ${sub} ${a}: a magic pathspec can reach a forbidden path; name the file`;
-    if (/[*?[\]]/.test(a))
-      return `git ${sub} ${a}: a wildcard can reach a forbidden path; name the file`;
-    if (path === "" || path === "." || roots.some((r) => r === path || r.startsWith(`${path}/`)))
-      return `git ${sub} ${a} covers a forbidden path (config.forbiddenPaths); name the files instead`;
+    for (const prefix of prefixes) {
+      let path: string;
+      if (isAbsolutePath(a, pl.platform)) {
+        const placed = placePath(a, null, pl.platform);
+        const rel = placed === null ? null : inWorktree(placed, pl.worktree);
+        if (rel === null)
+          return `git ${sub} ${a}: a path outside the worktree is not readable here`;
+        path = rel;
+      } else {
+        path = fold(normalizePathspec(prefix ? `${prefix}/${a}` : a));
+      }
+      if (matchesAny(path, forbidden))
+        return `git ${sub} would change ${a}, a forbidden path (config.forbiddenPaths)`;
+      if (isSecretFile(path))
+        return `git ${sub} names ${a}, a secret the session may not read or stage (the settings deny reading and editing the .env files; this is the same fence on git's side)`;
+      if (!rollsBack) continue;
+      if (/[*?[\]]/.test(a))
+        return `git ${sub} ${a}: a wildcard can reach a forbidden path; name the file`;
+      if (path === "" || path === "." || roots.some((r) => r === path || r.startsWith(`${path}/`)))
+        return `git ${sub} ${a} covers a forbidden path (config.forbiddenPaths); name the files instead`;
+    }
   }
   return null;
 }
@@ -745,7 +1054,7 @@ function checkFencedPaths(sub: string, rest: string[]): string | null {
  * Bundled and glued spellings included: `-vf` carries the `f`, and `--force=1` is a broken
  * command that must still not read as a different one.
  */
-function checkAdd(rest: string[]): string | null {
+function checkAdd(rest: string[], pl: Places): string | null {
   const override = rest.find(
     (a) =>
       /^(-f|--force|-N|--intent-to-add)$/.test(a.split("=")[0]!) ||
@@ -753,7 +1062,23 @@ function checkAdd(rest: string[]): string | null {
   );
   if (override)
     return `git add ${override} stages a file the ignore rules keep out of the index, and from the index it reaches a commit and a push`;
-  return checkFencedPaths("add", rest);
+  return checkFencedPaths("add", rest, pl);
+}
+
+/**
+ * `git checkout -B`, `git switch -C` and `git worktree add -B` create a branch, or reset it
+ * to another commit when it exists. Refused for every branch, as `git branch -f` is: the
+ * guard knows no protected branches (`checkBranch`).
+ */
+function branchReset(sub: string, opts: string[]): string | null {
+  const letter = sub === "switch" ? "C" : "B";
+  const reset = opts.find(
+    (a) =>
+      new RegExp(`^-[a-zA-Z]*${letter}`).test(a) ||
+      (sub === "switch" && /^--force-/.test(a.split("=")[0]!)),
+  );
+  if (!reset) return null;
+  return `git ${sub} ${reset} resets the branch it names when it exists; the guard knows no protected branches, so it refuses this for every branch, which the engine manages`;
 }
 
 /** The flags that take untracked files into a stash, in every spelling git accepts. */
@@ -782,7 +1107,7 @@ function checkStash(rest: string[]): string | null {
   return null;
 }
 
-function checkGit(args: string[]): string | null {
+function checkGit(args: string[], pl: Places): string | null {
   // `--no-index` reads two paths off the file system instead of the index, so
   // `git diff --no-index /dev/null .env.local` prints a file the session may not read —
   // `cat` under another name, through the one program on the allow list that has a reason
@@ -834,17 +1159,25 @@ function checkGit(args: string[]): string | null {
       const verb = rest.find((a) => !a.startsWith("-"));
       if (verb && !["list", "add", "remove", "prune"].includes(verb))
         return `git worktree ${verb} is not on the allowlist`;
+      if (verb === "add") return branchReset("worktree add", rest);
       return null;
     }
+    case "switch":
+      return branchReset(sub, rest);
     case "add":
-      return checkAdd(rest);
+      return checkAdd(rest, pl);
     case "stash":
       return checkStash(rest);
+    case "checkout": {
+      // Options only: after `--` a path may begin with `-B`.
+      const dashdash = rest.indexOf("--");
+      const reset = branchReset(sub, dashdash >= 0 ? rest.slice(0, dashdash) : rest);
+      return reset ?? checkFencedPaths(sub, rest, pl);
+    }
     case "rm":
     case "mv":
-    case "checkout":
     case "restore":
-      return checkFencedPaths(sub, rest);
+      return checkFencedPaths(sub, rest, pl);
     default:
       return null;
   }
@@ -940,37 +1273,108 @@ function checkFence(inv: Invocation): string | null {
   return `${p === "npx" ? "npx tsx" : "node"} runs a program the guard cannot read; ${FENCE_RULE}`;
 }
 
+/** Package runners: they run a package's program by name, and may fetch the package first. */
+const RUNNERS = new Set(["npx", "pnpx", "bunx", "npm", "pnpm", "yarn", "bun"]);
+
+/** The runners that take the command straight away; the others may name a verb first. */
+const DIRECT_RUNNERS = new Set(["npx", "pnpx", "bunx"]);
+
+/** The verbs a runner runs the command after: `npm exec`, `pnpm dlx`, `bun x`, `yarn run`. */
+const RUNNER_VERBS = new Set(["exec", "x", "dlx", "run", "run-script"]);
+
+/** The programs the interpreter fence decides, which no runner may run in their place. */
+const RUN_FENCED = new Set(["autoclaude", "node", "tsx"]);
+
+/**
+ * A package runner in front of a fenced program, or of a shell.
+ *
+ * `npx autoclaude publish 7`, `npm exec autoclaude merge 12` and `npx node -e x` run what
+ * the interpreter fence refuses, one program over; and `npx -c '…'`, `npm exec --call` and
+ * `pnpm exec --shell-mode` hand a string to a shell. The runner's command is found the way
+ * the runner reads it: past its flags (a flag's value may be the token after it, so that
+ * one is checked too), past a verb such as `exec` or `dlx`, and the first token after that
+ * is the command; nothing beyond it is consulted, so `npx vitest run test/autoclaude` is
+ * the runner's business. Any other command stays the permission layer's: the guard does not
+ * fence `npx` (ruling R38).
+ *
+ * `autoclaude` through a runner is refused even for `note` and `gates`: a runner may fetch
+ * a package of that name from the registry rather than run the engine.
+ */
+function checkRunner(p: string, args: Token[]): string | null {
+  let verb = DIRECT_RUNNERS.has(p);
+  let afterFlag = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]!;
+    const t = a.text;
+    if (t.startsWith("-")) {
+      if (/^(-c|--call|--shell-mode)(=|$)/.test(t))
+        return `${p} ${t} runs a shell command the guard cannot read`;
+      afterFlag = true;
+      continue;
+    }
+    if (!verb && !afterFlag && RUNNER_VERBS.has(t)) {
+      verb = true;
+      continue;
+    }
+    if (unreadable(a)) return `${p} runs "${t}", which the shell decides; name the command`;
+    const name = program(t).replace(/@.*$/, "");
+    // `npx tsx <script>` itself is the fence's own shape, decided by `checkFence`.
+    if (RUN_FENCED.has(name) && !(p === "npx" && k === 0 && t === "tsx")) {
+      if (name === "autoclaude")
+        return `autoclaude through ${p} may run a package of that name fetched from the registry; ${FENCE_RULE}, typed as they stand`;
+      return `${name} through ${p} runs a program the guard cannot read; ${FENCE_RULE}`;
+    }
+    if (!afterFlag) return null;
+    afterFlag = false;
+  }
+  return null;
+}
+
 /** `>` to one of these is not a write to a file, and needs no config to decide. */
 const NOWHERE = /^(\/dev\/(null|stdout|stderr|fd\/\d+)|NUL)$/i;
 
+/** What the shell would expand in a redirection target: the guard cannot place that. */
+const TARGET_SYNTAX = /[~$`*?[\]{}]/;
+
 /**
- * A shell redirection that would land in a fenced path.
+ * A shell redirection that would write outside the worktree or into a fenced path.
  *
  * Checked before the program is even identified, because it is the shell doing the
- * writing: `echo`, `sort`, `npm run x` — the verb is irrelevant. The fence is the same
- * list `checkFencedPaths` uses for `git checkout`, which is what makes this consistent
- * rather than a second policy.
+ * writing: `echo`, `sort`, `npm run x` — the verb is irrelevant. Each target is placed
+ * against every directory the shell may stand in (`places`): it must land inside the
+ * worktree, and there outside `forbiddenPaths`, the same list `checkFencedPaths` uses for
+ * `git checkout`, which is what makes this consistent rather than a second policy. A
+ * target the shell would still expand — `~`, `$HOME`, a substitution, a glob, a brace
+ * sequence such as `{e..e}` — is refused, because its place is the shell's to decide.
  */
-function checkWrites(seg: Segment): string | null {
+function checkWrites(seg: Segment, place: () => Places): string | null {
   const targets = (seg.writes ?? []).filter((t) => !NOWHERE.test(t));
   if (!targets.length) return null;
   const forbidden = projectConfig().forbiddenPaths ?? [];
   for (const t of targets) {
     if (/(^|[\\/])\.\.([\\/]|$)/.test(t)) return `a redirection to ${t} leaves the worktree`;
-    const path = t.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-    if (matchesAny(path, forbidden))
-      return `a redirection would write ${t}, a forbidden path (config.forbiddenPaths)`;
+    if (TARGET_SYNTAX.test(t))
+      return `a redirection to ${t} goes where the shell decides (~, $, a substitution, a glob or braces); name the file inside the worktree`;
+    const pl = place();
+    const fold = (s: string) => (foldsCase(pl.platform) ? s.toLowerCase() : s);
+    for (const d of pl.dirs) {
+      const placed = d === null ? null : placePath(t, d, pl.platform);
+      const rel = placed === null ? null : inWorktree(placed, pl.worktree);
+      if (rel === null) return `a redirection to ${t} leaves the worktree`;
+      if (matchesAny(rel, forbidden.map(fold)))
+        return `a redirection would write ${t}, a forbidden path (config.forbiddenPaths)`;
+    }
   }
   return null;
 }
 
-function checkSegment(seg: Segment): string | null {
-  const wrote = checkWrites(seg);
+function checkSegment(seg: Segment, place: () => Places): string | null {
+  const wrote = checkWrites(seg, place);
   if (wrote) return wrote;
   const inv = invocation(seg);
   if (!inv) return null;
-  // A wrapper the guard cannot see past: refused here rather than turned into a program
-  // name no branch below claims.
+  // A wrapper the guard cannot see past, or a program the shell decides: refused here
+  // rather than turned into a program name no branch below claims.
   if ("refusal" in inv) return inv.refusal;
   const { program: p, args, assigns } = inv;
   if (SHELLS.has(p)) return `${p} runs a nested shell the guard cannot read`;
@@ -992,6 +1396,11 @@ function checkSegment(seg: Segment): string | null {
     args.some((a) => /^-(exec|execdir|ok|okdir|delete|fprintf|fprint|fprint0|fls)$/.test(a.text))
   )
     return "find -exec, -delete and -fprint* run or write things the guard cannot read";
+  if (MOVES.has(p)) return place().moves.get(seg) ?? null;
+  if (RUNNERS.has(p)) {
+    const ran = checkRunner(p, args);
+    if (ran) return ran;
+  }
   if (
     p === "autoclaude" ||
     p === "node" ||
@@ -1007,8 +1416,13 @@ function checkSegment(seg: Segment): string | null {
   // cannot be read, because the forbidden paths are then unknown — including for a
   // subcommand that reads none.
   projectConfig();
+  // git works on the repository of the directory it runs in: from outside the worktree
+  // that is another checkout, which none of the checks below are written for.
+  const pl = place();
+  if (pl.dirs.some((d) => d === null || inWorktree(d, pl.worktree) === null))
+    return "git would run in a directory outside the worktree, which none of the guard's git checks are written for; run it inside the worktree";
   const words = args.map((a) => a.text);
-  return checkGit(words);
+  return checkGit(words, pl);
 }
 
 /**
@@ -1018,27 +1432,41 @@ function checkSegment(seg: Segment): string | null {
  * would need a failure path of its own, and the only one a hook has is the refusal its
  * caller makes of a throw. It is checked at most once per call, and only once a decision
  * needs it.
+ *
+ * `cwd` is the directory the shell stands in when the command starts, when the caller
+ * knows it (Claude Code reports it in the hook's payload); without it the command is taken
+ * to start in the worktree. A shell that keeps its directory between commands starts the
+ * next one wherever the last `cd` left it.
  */
-export function refusalFor(command: string, cfg: GuardConfig): string | null {
+export function refusalFor(command: string, cfg: GuardConfig, cwd?: string): string | null {
   if (!cfg) {
     throw new TypeError("refusalFor needs the guard config");
   }
   if (typeof command !== "string") {
     throw new TypeError("refusalFor needs the command as a string");
   }
+  if (cwd !== undefined && typeof cwd !== "string") {
+    throw new TypeError("refusalFor needs the starting directory as a string");
+  }
   configSource = cfg;
   config = null;
+  startDir = cwd;
   try {
     return decide(command);
   } finally {
     configSource = null;
     config = null;
+    startDir = undefined;
   }
 }
 
 function decide(command: string): string | null {
-  for (const seg of tokenize(command)) {
-    const reason = checkSegment(seg);
+  const segments = tokenize(command);
+  // Worked out on first use: a command with no path in it needs no config for this.
+  let known: Places | null = null;
+  const place = (): Places => (known ??= places(segments, command));
+  for (const seg of segments) {
+    const reason = checkSegment(seg, place);
     if (reason) {
       const shown = seg
         .map((t) => t.text)

@@ -14,6 +14,7 @@ const FIXTURE: GuardConfig = {
   forbiddenPaths: ["tools/engine/**", ".autoclaude/config.json", ".github/workflows/**"],
   fenceAllow: ["npx tsx tools/codegen.ts"],
   worktree: "/work/tree",
+  platform: "linux",
 };
 const cfg = FIXTURE;
 
@@ -621,13 +622,18 @@ describe("the port's own rules", () => {
 
   it("allows autoclaude note and gates, and the project's fence.allow prefixes", () => {
     expect(refusalFor("autoclaude note 7 'tests red a.test.ts'", cfg)).toBeNull();
-    // Ruling R7: a generic tool name instead of the brief's example.
-    expect(
-      refusalFor("npx dbtool migration new add_x", {
-        ...cfg,
-        fenceAllow: ["npx dbtool migration new"],
-      }),
-    ).toBeNull();
+    // Ruling R38: the prefix is tried on a program the guard fences, so the test tells an
+    // allow from a refusal — refused without the prefix, allowed with it, and a longer
+    // token than the prefix's stays refused.
+    const migration = "node scripts/new-migration.js add_x";
+    expect(refusalFor(migration, { ...cfg, fenceAllow: [] })).toMatch(FENCE);
+    const allow = { ...cfg, fenceAllow: ["node scripts/new-migration.js"] };
+    expect(refusalFor(migration, allow)).toBeNull();
+    expect(refusalFor("node scripts/new-migration.jsx add_x", allow)).toMatch(FENCE);
+    // Ruling R7's example: `npx` with any program but tsx is not fenced by the guard at all,
+    // prefix or not (ruling R38); Claude Code's permission layer refuses it without an allow
+    // rule, which is where `fence.allow` opens it.
+    expect(refusalFor("npx dbtool migration new add_x", { ...cfg, fenceAllow: [] })).toBeNull();
     expect(refusalFor("autoclaude gates", cfg)).toBeNull();
     expect(refusalFor("autoclaude gates --fix lint", cfg)).toBeNull();
     expect(refusalFor("cd x && autoclaude note 5 'x'", cfg)).toBeNull();
@@ -649,8 +655,71 @@ describe("the port's own rules", () => {
       "autoclaude gate",
       "timeout 30 autoclaude publish 7",
       "/usr/local/bin/autoclaude publish 7",
+      // Through a package runner, which reads its own flags and verb before the command.
+      "npx autoclaude publish 7",
+      "npx autoclaude@1 merge 12",
+      "npx @scope/autoclaude publish 7",
+      "npx --yes autoclaude publish 7",
+      "npx -p autoclaude autoclaude publish 7",
+      "npx -p other autoclaude publish 7",
+      "npx --package=autoclaude autoclaude merge 12",
+      "npm exec autoclaude publish 7",
+      "npm exec -- autoclaude publish 7",
+      "npm x autoclaude publish 7",
+      "npm --prefix x exec autoclaude publish 7",
+      "pnpm exec autoclaude publish 7",
+      "pnpm dlx autoclaude publish 7",
+      "pnpm -C dir exec autoclaude publish 7",
+      "pnpx autoclaude publish 7",
+      "yarn dlx autoclaude publish 7",
+      "yarn autoclaude publish 7",
+      "yarn run autoclaude publish 7",
+      "bunx autoclaude publish 7",
+      "bun x autoclaude publish 7",
+      "timeout 30 npx autoclaude publish 7",
+      // Even the permitted verbs: a runner may fetch a package of that name instead.
+      "npx autoclaude note 5 x",
+      "npx -y autoclaude gates",
     ])
       expect(refusalFor(c, cfg), c).toMatch(FENCE);
+  });
+
+  it("does not let a package runner run a fenced interpreter, or a shell string", () => {
+    for (const c of [
+      "npx --yes tsx evil.ts",
+      "npx -p tsx tsx evil.ts",
+      "npx tsx@4 evil.ts",
+      "npm exec tsx evil.ts",
+      "pnpm dlx tsx evil.ts",
+      "npx node -e x",
+      "npm exec node evil.js",
+      "yarn node evil.js",
+    ])
+      expect(refusalFor(c, cfg), c).toMatch(FENCE);
+    for (const c of [
+      "npx -c 'autoclaude publish 7'",
+      "npx --call='git push origin HEAD'",
+      "npm exec -c 'autoclaude merge 12'",
+      "npm exec --call 'x'",
+      "pnpm exec --shell-mode 'autoclaude publish 7'",
+      "pnpm dlx -c 'x'",
+    ])
+      expect(refusalFor(c, cfg), c).toMatch(/runs a shell command the guard cannot read/);
+    // A command the runner names from the shell is no command the guard can read.
+    expect(refusalFor("npx $PKG publish", cfg)).toMatch(/which the shell decides/);
+    // The plain `npx tsx` shape is still the fence's own, and the runner's other commands
+    // are its business: nothing past the command is read.
+    expect(refusalFor("npx tsx tools/codegen.ts", cfg)).toBeNull();
+    for (const c of [
+      "npx vitest run test/autoclaude",
+      "npx --yes vitest run",
+      "npm test",
+      "npm run build",
+      "npm install --save-dev autoclaude",
+      "yarn add -D tsx",
+      "pnpm exec vitest run",
+    ])
+      expect(refusalFor(c, cfg), c).toBeNull();
   });
 
   it("matches a prefix on whole tokens, never on a part of one", () => {
@@ -756,12 +825,31 @@ describe("the port's own rules", () => {
     // A missing field must not read as an empty fence: an absent `forbiddenPaths` that
     // became `[]` would let `git rm` on the engine's own files through.
     it.each([
-      [{ fenceAllow: [], worktree: "/w" }, /missing forbiddenPaths/],
-      [{ forbiddenPaths: [], worktree: "/w" }, /missing fenceAllow/],
-      [{ forbiddenPaths: [], fenceAllow: [] }, /missing worktree/],
-      [{ forbiddenPaths: "tools/**", fenceAllow: [], worktree: "/w" }, /missing forbiddenPaths/],
-      [{ forbiddenPaths: [1], fenceAllow: [], worktree: "/w" }, /missing forbiddenPaths/],
-      [{ forbiddenPaths: [], fenceAllow: [null], worktree: "/w" }, /missing fenceAllow/],
+      [{ fenceAllow: [], worktree: "/w", platform: "linux" }, /missing forbiddenPaths/],
+      [{ forbiddenPaths: [], worktree: "/w", platform: "linux" }, /missing fenceAllow/],
+      [{ forbiddenPaths: [], fenceAllow: [], platform: "linux" }, /missing worktree/],
+      [
+        { forbiddenPaths: "tools/**", fenceAllow: [], worktree: "/w", platform: "linux" },
+        /missing forbiddenPaths/,
+      ],
+      [
+        { forbiddenPaths: [1], fenceAllow: [], worktree: "/w", platform: "linux" },
+        /missing forbiddenPaths/,
+      ],
+      [
+        { forbiddenPaths: [], fenceAllow: [null], worktree: "/w", platform: "linux" },
+        /missing fenceAllow/,
+      ],
+      // Every path is placed against the worktree, so it has to be one the guard can place.
+      [
+        { forbiddenPaths: [], fenceAllow: [], worktree: "work/tree", platform: "linux" },
+        /missing worktree \(an absolute path\)/,
+      ],
+      [
+        { forbiddenPaths: [], fenceAllow: [], worktree: "/work/tree", platform: "win32" },
+        /missing worktree \(an absolute path\)/,
+      ],
+      [{ forbiddenPaths: [], fenceAllow: [], worktree: "/w", platform: 7 }, /missing platform/],
     ])("refuses a git command when it is malformed: %j", (bad, why) => {
       expect(() => refusalFor("git rm tools/engine/x.ts", bad as unknown as GuardConfig)).toThrow(
         why,
@@ -781,5 +869,266 @@ describe("the port's own rules", () => {
       expect(refusalFor("git rm tools/engine/x.ts", { ...cfg, forbiddenPaths: [] })).toBeNull();
       expect(() => refusalFor("git rm tools/engine/x.ts", {} as unknown as GuardConfig)).toThrow();
     });
+  });
+});
+
+/**
+ * Hardening beyond the four changes (ruling R37; design § 7.5, "the hook fails closed",
+ * and the anti-goal of a model holding write power over the forge). Each block is one of
+ * the ruling's items; every refusal above is still made.
+ */
+describe("hardening (ruling R37)", () => {
+  const SHELL_DECIDES = /decided by the shell/;
+  const DANGER = /hands the command to a split string, a shell or another directory/;
+  const LEAVES = /leaves the worktree/;
+  const UNPLACED = /goes where the shell decides/;
+  const FORBIDDEN = /forbidden path/;
+  const MOVE = /stay inside the worktree/;
+  const RESET = /resets the branch it names/;
+  const no = (c: string, why: RegExp, c2 = cfg) => expect(refusalFor(c, c2), c).toMatch(why);
+  const yes = (c: string, c2 = cfg) => expect(refusalFor(c, c2), c).toBeNull();
+
+  it("(a) refuses a program the shell decides: an expansion, a substitution or a glob", () => {
+    for (const c of [
+      "$(echo git) push origin HEAD",
+      "g=git; $g push origin HEAD",
+      "`printf gh` pr merge 1",
+      "$'git' push origin HEAD",
+      "/usr/bin/g?t push origin HEAD",
+      "/usr/bin/nod[e] -e x",
+      "/usr/bin/gi* push origin HEAD",
+      '"$GIT" push origin HEAD',
+      "~/bin/git push origin HEAD",
+      "{git,x} push origin HEAD",
+      "timeout 30 $CMD",
+      // Read as typed, these would be a wrapper or an assignment; the shell makes them a
+      // command line of its own: `env bash -c evil`, `git push origin HEAD x=1`.
+      "env$(printf ' bash -c evil')",
+      "time$(printf ' git push origin HEAD')",
+      "$(printf 'git push origin HEAD ')x=1",
+    ])
+      no(c, SHELL_DECIDES);
+    // An assignment's value may be anything; a lone `[` is the test command, and a glob
+    // in an argument is the argument's business.
+    yes("dir=$(pwd)");
+    yes("x=$(git rev-parse HEAD); echo $x");
+    yes("[ -f x ] && echo y");
+    yes("test -f x && echo '*'");
+    yes("echo *.ts");
+    yes("{ git status; }");
+  });
+
+  it("(b) refuses wrapper flags that hand the command on: env -S, env -C, sudo -s and their kin", () => {
+    for (const c of [
+      "env -S 'bash -c evil' git status",
+      "env --split-string='bash -c evil' git status",
+      "env --split='bash -c evil' git status",
+      "env -iS 'bash -c evil' git status",
+      "env -u X -S 'bash -c evil' git status",
+      "timeout 5 env -S 'bash -c evil' git status",
+      "env -C /elsewhere git rm x",
+      "env --chdir=/elsewhere git status",
+      "sudo -s git log '$(evil)'",
+      "sudo -i git status",
+      "sudo --shell git status",
+      "sudo -D /elsewhere git status",
+      "doas -s git status",
+    ])
+      no(c, DANGER);
+    yes("env -u PATH git status");
+    yes("env -uSOMEVAR git status");
+    yes("sudo -u me git status");
+  });
+
+  describe("(c) redirections land inside the worktree", () => {
+    it("refuses a write outside it, into a forbidden path, or where the shell decides", () => {
+      for (const c of [
+        "echo x > /tmp/x",
+        "echo x > /work/tree/../x",
+        "echo x > /work/treehouse/x",
+        "echo x &>> /tmp/log",
+        "true && > /tmp/x",
+        "exec 3<> /tmp/x",
+        "echo x 2> /tmp/err",
+        "npm test >& /tmp/out",
+        "echo x >| /tmp/x",
+      ])
+        no(c, LEAVES);
+      for (const c of [
+        "echo x > /work/tree/tools/engine/x.ts",
+        // `&>` was read as the operator `&`, and its write fell into an empty segment.
+        "echo x &> tools/engine/x.ts",
+        // A redirection with no command still truncates the file.
+        "> tools/engine/x.ts",
+        "true && > tools/engine/x.ts",
+      ])
+        no(c, FORBIDDEN);
+      for (const c of [
+        "echo x > ~/.bashrc",
+        'echo x > "$HOME/.bashrc"',
+        "echo x > $(echo f)",
+        "echo x > `echo f`",
+        "echo x > tools/eng*/x.ts",
+        "echo x > tools/{e..e}ngine/x.ts",
+      ])
+        no(c, UNPLACED);
+    });
+
+    it("allows a write inside it, the null device and descriptor duplications", () => {
+      for (const c of [
+        "echo x > /work/tree/notes.txt",
+        "echo x > ./notes.txt",
+        "echo x >> sub/notes.txt",
+        "npm test >&2",
+        "npm test 2>&1 | tee out.txt",
+        "npm test >&-",
+        "npm test >& out.txt",
+        "npm test &> /dev/null",
+        "npm test > /dev/null 2> /dev/stderr",
+        "cat < /etc/hosts",
+      ])
+        yes(c);
+    });
+
+    // Review Focus 1: a path with a space and a non-ASCII character.
+    it("places Windows paths in every spelling Git Bash accepts, with case folded", () => {
+      const win: GuardConfig = {
+        ...cfg,
+        worktree: "C:\\Users\\Jürgen Müller\\My Projects\\app",
+        platform: "win32",
+      };
+      for (const c of [
+        'echo x > "C:/Users/Jürgen Müller/My Projects/app/notes.txt"',
+        'echo x > "c:\\users\\jürgen müller\\my projects\\APP\\notes.txt"',
+        'echo x > "/c/Users/Jürgen Müller/My Projects/app/notes.txt"',
+        "echo x > notes.txt",
+      ])
+        yes(c, win);
+      no('echo x > "C:/Users/Jürgen Müller/My Projects/app/TOOLS/Engine/x.ts"', FORBIDDEN, win);
+      no("echo x > TOOLS/ENGINE/x.ts", FORBIDDEN, win);
+      for (const c of [
+        'echo x > "D:/elsewhere/x"',
+        "echo x > /tmp/x",
+        'echo x > "C:x"',
+        'echo x > "//server/share/x"',
+        'echo x > "C:/Users/Jürgen Müller/My Projects/app2/x"',
+      ])
+        no(c, LEAVES, win);
+      // The worktree itself may come in the Git Bash spelling.
+      yes('echo x > "C:/Users/Jürgen Müller/My Projects/app/a"', {
+        ...win,
+        worktree: "/c/Users/Jürgen Müller/My Projects/app",
+      });
+    });
+
+    it("folds case on macOS, and not on Linux, whose file systems tell the cases apart", () => {
+      const mac: GuardConfig = {
+        ...cfg,
+        worktree: "/Users/jürgen/My Projects/app",
+        platform: "darwin",
+      };
+      yes('echo x > "/users/JÜRGEN/my projects/app/x"', mac);
+      no("echo x > TOOLS/ENGINE/x.ts", FORBIDDEN, mac);
+      yes("echo x > TOOLS/ENGINE/x.ts");
+      no('echo x > "/Work/Tree/x"', LEAVES);
+    });
+  });
+
+  describe("(d) cd and pushd stay inside the worktree", () => {
+    it("refuses a move outside it, or one the guard cannot follow", () => {
+      for (const c of [
+        "cd /tmp",
+        "cd ..",
+        "cd -- /tmp",
+        "cd -P /tmp",
+        "cd /work/tree/../other",
+        "cd /work/treehouse",
+        "cd sub && cd ../..",
+        "cd",
+        "cd ~",
+        "cd ~/x",
+        "cd -",
+        'cd "$HOME"',
+        "cd $(git rev-parse --show-toplevel)",
+        "pushd /tmp",
+        "pushd",
+        "pushd +1",
+        "popd",
+        "pushd sub && popd && popd",
+        // A relative move that may run more than once lands somewhere new each time.
+        "for d in a b; do cd sub; done",
+        "while true; do cd sub; done",
+        "f() { cd sub; }; f; f",
+      ])
+        no(c, MOVE);
+    });
+
+    it("allows a move inside it", () => {
+      for (const c of [
+        "cd sub && npm test",
+        "cd /work/tree/sub && npm test",
+        "cd /work/tree",
+        "cd .",
+        "cd -P sub",
+        "pushd sub && npm test && popd",
+        "for f in a b; do echo $f; done && cd /work/tree/sub",
+        "cd sub && echo x > notes.txt",
+      ])
+        yes(c);
+    });
+
+    it("places every later path from each directory the shell may stand in", () => {
+      no("cd tools && echo x > engine/x.ts", FORBIDDEN);
+      no("cd tools && git rm engine/guard.mjs", FORBIDDEN);
+      no("cd tools; git checkout abc1234 -- engine", /covers a forbidden path/);
+      // The subshell's `cd` does not move the shell, and the guard keeps both places.
+      no("(cd sub); echo x > tools/engine/x.ts", FORBIDDEN);
+      no("(cd tools); echo x > engine/x.ts", FORBIDDEN);
+    });
+
+    it("places git's own pathspecs: absolute ones, and magic ones for every verb", () => {
+      no("git rm /work/tree/tools/engine/guard.mjs", FORBIDDEN);
+      no("git rm /elsewhere/x", /outside the worktree/);
+      no("git add ':/tools/engine/guard.mjs'", /magic pathspec/);
+      no("git add ':(top)tools/engine/guard.mjs'", /magic pathspec/);
+      yes("git rm /work/tree/src/x.ts");
+      yes("git add src/x.ts");
+    });
+
+    it("starts where the caller says the shell stands", () => {
+      const inTools = "/work/tree/tools";
+      expect(refusalFor("echo x > engine/x.ts", cfg, inTools)).toMatch(FORBIDDEN);
+      expect(refusalFor("git rm engine/guard.mjs", cfg, inTools)).toMatch(FORBIDDEN);
+      expect(refusalFor("git status", cfg, inTools)).toBeNull();
+      expect(refusalFor("echo x > engine/x.ts", cfg)).toBeNull();
+      // Outside the worktree: git would work on another checkout, and a relative write
+      // lands outside; a command with no path in it is not the guard's to place.
+      const outside = "/elsewhere";
+      expect(refusalFor("git status", cfg, outside)).toMatch(/outside the worktree/);
+      expect(refusalFor("echo x > a.txt", cfg, outside)).toMatch(LEAVES);
+      expect(refusalFor("cd sub", cfg, outside)).toMatch(MOVE);
+      expect(refusalFor("echo x > /work/tree/a.txt", cfg, outside)).toBeNull();
+      expect(refusalFor("npm test", cfg, outside)).toBeNull();
+      expect(() => refusalFor("npm test", cfg, 7 as unknown as string)).toThrow(/as a string/);
+    });
+  });
+
+  it("(e) refuses checkout -B, switch -C and worktree add -B, as branch -f is", () => {
+    for (const c of [
+      "git checkout -B trunk origin/trunk",
+      "git checkout -qB trunk",
+      "git switch -C trunk",
+      "git switch --force-create trunk",
+      "git switch --force-c trunk",
+      "git switch --force-create=trunk",
+      "git worktree add -B trunk /tmp/x origin/trunk",
+    ])
+      no(c, RESET);
+    yes("git switch -c agent/2-y");
+    yes("git switch agent/2-y");
+    yes("git checkout -b agent/2-y");
+    // After `--` the word is a path, whatever it looks like.
+    yes("git checkout -- -Bfile");
+    yes("git worktree add /tmp/x origin/trunk");
   });
 });
