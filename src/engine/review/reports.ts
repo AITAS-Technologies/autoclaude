@@ -20,6 +20,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { issueArg } from "../../cli/args.js";
 import type { ProjectConfig } from "../../config/types.js";
 import { loadProjectConfig } from "../../config/load.js";
 import type { Verdict } from "./red-step-verdict.js";
@@ -34,19 +35,6 @@ import {
   type FindingClass,
   type Level,
 } from "./rules.js";
-
-/**
- * A whole positive number, by the rule every command-line token goes through: digits only,
- * no sign, no zero, no leading zero. The usage string names what was being read.
- */
-function issueArg(token: string | undefined, usage: string): number {
-  const text = token ?? "";
-  const n = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-  if (!Number.isSafeInteger(n) || n <= 0 || String(n) !== text) {
-    throw new Error(`${usage}: "${text}" is not an issue number`);
-  }
-  return n;
-}
 
 export type Stage = "plan" | "plan-review" | "implement" | "code-review";
 

@@ -12,19 +12,15 @@
  * ending in `.test.ts` or `.test.tsx`, and this file holds no cases.
  */
 
+import type { LedgerEntry } from "../../src/engine/ledger/ledger.js";
 import type {
   CodeReviewReport,
   PlanReviewReport,
   ReviewFinding,
 } from "../../src/engine/review/reports.js";
 
-/** A ledger entry's attempt counters (the ledger itself is a later task's). */
-export interface Attempts {
-  implement: number;
-  fix: number;
-  reviewRetry: number;
-  plan: number;
-}
+/** The ledger's own type for an entry's attempt counters. */
+export type Attempts = LedgerEntry["attempts"];
 
 /** A ledger entry's counters: one implement attempt spent, nothing else. */
 export const attempts = (over: Partial<Attempts> = {}): Attempts => ({
