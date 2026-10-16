@@ -333,31 +333,22 @@ executes, `autoclaude doctor` refuses the pair (C18).
 ```ts
 interface Runtime {
   name: "claude" | "codex";
-  available(): Promise<Availability>; // installed, logged in, version
+  available(): Promise<Availability>;              // installed, logged in, version
   runStage(req: StageRequest): Promise<StageResult>;
-  readUsage(): Promise<UsageSnapshot | Unknown>; // § 9
+  readUsage(): Promise<UsageSnapshot | Unknown>;   // § 9
   fence(project: ProjectConfig, worktree: string): FenceFiles; // generated per run
 }
 
 interface StageRequest {
-  cwd: string;
-  prompt: string;
-  dispatchFile: string;
-  outputFile: string;
-  model: string;
-  effort: "low" | "medium" | "high" | "max";
-  schema?: JsonSchema;
-  timeoutMs: number;
-  maxTurns?: number;
+  cwd: string; prompt: string; dispatchFile: string; outputFile: string;
+  model: string; effort: "low" | "medium" | "high" | "max";
+  schema?: JsonSchema; timeoutMs: number; maxTurns?: number;
 }
 
 interface StageResult {
   exit: "ok" | "failed" | "timeout" | "limit" | "refused";
-  limitResetsAt?: Date;
-  tokens?: TokenUsage;
-  costUsd?: number;
-  transcriptPath: string;
-  errorClass?: "auth" | "quota" | "config" | "network" | "unknown";
+  limitResetsAt?: Date; tokens?: TokenUsage; costUsd?: number;
+  transcriptPath: string; errorClass?: "auth" | "quota" | "config" | "network" | "unknown";
 }
 ```
 
@@ -399,112 +390,72 @@ checks config, labels, commands, runtimes, the `gh` login (and warns when its to
 
 ```jsonc
 {
-  "autoclaude": ">=0.1.0", // refuse to run on an older engine
+  "autoclaude": ">=0.1.0",                       // refuse to run on an older engine
   "forge": { "remote": "origin" },
   "branches": { "integration": "develop", "production": "main" },
-  "humans": ["your-github-handle"], // mentioned when input is needed
-  "bootstrap": "npm ci", // run by the engine, not the model
-  "gates": [
-    // run in order by implementer and publish
-    {
-      "name": "format",
-      "check": "npx prettier --check {files}",
-      "fix": "npx prettier --write {files}",
-    },
+  "humans": ["your-github-handle"],              // mentioned when input is needed
+  "bootstrap": "npm ci",                          // run by the engine, not the model
+  "gates": [                                      // run in order by implementer and publish
+    { "name": "format", "check": "npx prettier --check {files}", "fix": "npx prettier --write {files}" },
     { "name": "lint", "check": "npm run lint" },
     { "name": "typecheck", "check": "npm run typecheck" },
     { "name": "test", "check": "npm test" },
     { "name": "build", "check": "npm run build" },
-    {
-      "name": "migration-lint",
-      "check": "./scripts/lint-migrations.sh {files}",
-      "when": ["db/migrations/**"],
-    },
+    { "name": "migration-lint", "check": "./scripts/lint-migrations.sh {files}",
+      "when": ["db/migrations/**"] }
   ],
   "redStep": {
     "testFiles": ["tests/**/*.test.ts", "src/**/*.test.ts"],
     "supportFiles": ["tests/helpers/**"],
     "exclude": ["tests/e2e/**"],
     "run": "npx vitest run --reporter=junit --outputFile={report} {files}",
-    "result": "junit", // junit | exit-code
-    "install": { "when": "package-lock.json", "run": "npm ci" },
+    "result": "junit",                            // junit | exit-code
+    "install": { "when": "package-lock.json", "run": "npm ci" }
   },
   "worktrees": { "root": ".autoclaude/worktrees", "copy": [".env.local"] },
   "stages": {
-    "triage": { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
-    "plan": {
-      "runtime": "claude",
-      "model": "claude-opus-5-5",
-      "effort": "high",
-      "fallback": { "runtime": "codex", "model": "<codex model>", "effort": "high" },
-    },
-    "planReview": { "runtime": "claude", "model": "claude-opus-5-5", "effort": "medium" },
-    "implement": { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
-    "codeReview": {
-      "angles": {
-        "default": { "runtime": "claude", "model": "claude-sonnet-5-5" },
-        "security": { "runtime": "claude", "model": "claude-opus-5-5" },
-      },
-      "scorer": { "runtime": "claude", "model": "claude-sonnet-5-5" },
-    },
+    "triage":     { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+    "plan":       { "runtime": "claude", "model": "claude-opus-5-5",   "effort": "high",
+                    "fallback": { "runtime": "codex", "model": "<codex model>", "effort": "high" } },
+    "planReview": { "runtime": "claude", "model": "claude-opus-5-5",   "effort": "medium" },
+    "implement":  { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+    "codeReview": { "angles": { "default":  { "runtime": "claude", "model": "claude-sonnet-5-5" },
+                                "security": { "runtime": "claude", "model": "claude-opus-5-5" } },
+                    "scorer": { "runtime": "claude", "model": "claude-sonnet-5-5" } }
   },
   "budget": {
     "claude": { "fiveHourPct": 80, "weeklyPct": 90 },
-    "codex": { "fiveHourPct": 70, "weeklyPct": 85 },
+    "codex":  { "fiveHourPct": 70, "weeklyPct": 85 }
   },
   "schedule": { "timezone": "Europe/Berlin", "triageAt": "06:00", "concurrency": 2 },
   "triage": { "since": "2026-11-01", "optInLabel": "agent-triage", "maxPerDay": 10 },
   "queue": {
     "ready": "agent-ready",
-    "priority": ["priority: critical", "priority: high"], // first match wins; unlabeled last; ties: oldest
+    "priority": ["priority: critical", "priority: high"]   // first match wins; unlabeled last; ties: oldest
   },
   "automerge": {
     "enabled": true,
     "label": "automerge-dev",
     "categories": ["bug", "documentation"],
-    "method": "squash",
+    "method": "squash"
   },
-  "humanApproval": [
-    // paths that need a human's label to merge
-    { "paths": ["db/migrations/**"], "label": "agent-migration-ok" },
+  "humanApproval": [                               // paths that need a human's label to merge
+    { "paths": ["db/migrations/**"], "label": "agent-migration-ok" }
   ],
-  "labelRules": [
-    // labels the engine adds from the diff
-    { "when": ["src/ui/**"], "unless": ["src/ui/**/*.test.ts"], "label": "review:ui" },
+  "labelRules": [                                  // labels the engine adds from the diff
+    { "when": ["src/ui/**"], "unless": ["src/ui/**/*.test.ts"], "label": "review:ui" }
   ],
   "requiredChecks": ["test", "build"],
   "forbiddenPaths": [".github/workflows/**", ".autoclaude/**", "CLAUDE.md", "AGENTS.md"],
   "policyAdjacentPaths": ["src/auth/**"],
-  "codeReview": {
-    "angles": [
-      "criteria",
-      "bugs",
-      "invariants",
-      "history",
-      "prior-prs",
-      "comments",
-      "performance",
-      "tests",
-      "security",
-    ],
-    "scoreThreshold": 7,
-  },
+  "codeReview": { "angles": ["criteria", "bugs", "invariants", "history", "prior-prs",
+                             "comments", "performance", "tests", "security"],
+                  "scoreThreshold": 7 },
   "planReview": { "scoreThreshold": 7 },
-  "caps": {
-    "fixRounds": 2,
-    "reviewRetries": 2,
-    "planRounds": 2,
-    "wallClockMinutesPerStage": 60,
-    "openPullRequests": 4,
-    "staleClaimHours": 2,
-  },
-  "labels": {
-    "working": "agent-working",
-    "blocked": "agent-blocked",
-    "needsShaping": "needs-shaping",
-    "fixRound": "agent-fix-",
-    "reviewRetry": "agent-retry-",
-  },
+  "caps": { "fixRounds": 2, "reviewRetries": 2, "planRounds": 2,
+            "wallClockMinutesPerStage": 60, "openPullRequests": 4, "staleClaimHours": 2 },
+  "labels": { "working": "agent-working", "blocked": "agent-blocked",
+              "needsShaping": "needs-shaping", "fixRound": "agent-fix-", "reviewRetry": "agent-retry-" }
 }
 ```
 
