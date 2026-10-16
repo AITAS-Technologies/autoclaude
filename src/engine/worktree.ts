@@ -1,0 +1,373 @@
+/**
+ * Worktrees for agent work, named deterministically so the issue-to-worktree mapping
+ * lives in the directory name and not only in the ledger.
+ *
+ * One worktree per issue, under `worktrees.root` (resolved against the project root when
+ * relative). The branch `agent/<issue>-<slug>` becomes the directory `agent+<issue>-<slug>`,
+ * so the prefix on disk is derived from the configured branch prefix, never hardcoded.
+ *
+ * The issue title is GitHub-controlled text. It only ever becomes a slug (lowercase ASCII
+ * letters, digits and single hyphens) and argv elements; no command line here goes
+ * through a shell.
+ */
+
+import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { ProjectConfig } from "../config/types.js";
+import { git, realExec, type Exec } from "../forge/github.js";
+import { toPosix } from "../platform/paths.js";
+import { branchPrefixFor, worktreeDirPrefix } from "./branch-names.js";
+// `review/rules.ts` imports a leaf module and nothing else, so this closes no loop, which
+// matters because `rules.ts` calls `escapeRegExp` at module scope.
+import { escapeRegExp } from "./review/rules.js";
+import { repoRoot } from "./root.js";
+
+const MAX_SLUG = 40;
+
+export function slugify(title: string): string {
+  const s = title
+    .replace(/[äÄ]/g, "ae")
+    .replace(/[öÖ]/g, "oe")
+    .replace(/[üÜ]/g, "ue")
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    // Strip the combining marks NFKD split off (é -> e + U+0301); \p{M} keeps the source ASCII.
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, MAX_SLUG)
+    .replace(/-+$/g, "");
+  return s || "issue";
+}
+
+/** The branch and the absolute (forward-slash) worktree directory of an issue. */
+export function namesFor(
+  issue: number,
+  title: string,
+  cfg: ProjectConfig,
+  root: string,
+): { branch: string; worktree: string } {
+  const slug = slugify(title);
+  return {
+    branch: `${branchPrefixFor(issue, cfg)}${slug}`,
+    worktree: toPosix(
+      join(resolve(root, cfg.worktrees.root), `${worktreeDirPrefix(cfg)}${issue}-${slug}`),
+    ),
+  };
+}
+
+export function parseWorktrees(porcelain: string): Array<{ path: string; branch: string | null }> {
+  const out: Array<{ path: string; branch: string | null }> = [];
+  for (const block of porcelain.split(/\n\s*\n/)) {
+    const path = block.match(/^worktree (.+)$/m)?.[1];
+    if (!path) continue;
+    const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? null;
+    out.push({ path: path.trim(), branch });
+  }
+  return out;
+}
+
+export function listWorktrees(
+  root: string,
+  exec: Exec = realExec,
+): Array<{ path: string; branch: string | null }> {
+  return parseWorktrees(git(["worktree", "list", "--porcelain"], exec, root));
+}
+
+export function findWorktree(
+  root: string,
+  issue: number,
+  cfg: ProjectConfig,
+  exec: Exec = realExec,
+): { path: string; branch: string | null } | null {
+  const re = new RegExp(`[\\\\/]${escapeRegExp(worktreeDirPrefix(cfg))}(\\d+)-`);
+  return listWorktrees(root, exec).find((w) => re.exec(w.path)?.[1] === String(issue)) ?? null;
+}
+
+export interface CreatedWorktree {
+  branch: string;
+  /** Absolute, forward slashes. */
+  worktree: string;
+  /** The `worktrees.copy` entries that were copied in, as configured. */
+  copied: string[];
+  /** The `worktrees.copy` entries that do not exist in the project root (skipped, not an error). */
+  missing: string[];
+  /** Things the caller should log: a fallback that was taken, a remote tip that moved. */
+  notes: string[];
+}
+
+/**
+ * @param opts.replace discard an existing worktree or a branch left without one
+ * @param opts.pushedSha the head the ledger recorded as pushed for this issue; when set and
+ *   `<remote>/<branch>` exists, the worktree is created on that remote branch rather than
+ *   on the integration branch, so the already pushed commits are in it and the publish
+ *   lease check against the remote head still holds
+ * @param opts.root the project root; defaults to the main working directory of the
+ *   repository the process runs in
+ */
+export function createWorktree(
+  issue: number,
+  title: string,
+  opts: { replace: boolean; pushedSha?: string; root?: string },
+  cfg: ProjectConfig,
+  exec: Exec = realExec,
+): CreatedWorktree {
+  const root = opts.root ?? repoRoot(process.cwd());
+  const remote = cfg.forge.remote;
+  const existing = findWorktree(root, issue, cfg, exec);
+  if (existing) {
+    if (!opts.replace)
+      throw new Error(
+        `issue ${issue} already has a worktree at ${existing.path}; pass --replace to discard it`,
+      );
+    removeWorktree(root, issue, cfg, { deleteRemote: false }, exec);
+  }
+  const names = namesFor(issue, title, cfg, root);
+  git(["fetch", remote, cfg.branches.integration, "--quiet"], exec, root);
+  // A branch left behind without its worktree (a failed `branch -D`, a detached checkout)
+  // would make `worktree add -b` die on "already exists"; with replace it is discarded
+  // like the worktree would have been, without it the error names the way out.
+  if (git(["branch", "--list", names.branch], exec, root).trim()) {
+    if (!opts.replace)
+      throw new Error(
+        `branch ${names.branch} already exists without a worktree; pass --replace to discard it`,
+      );
+    git(["branch", "-D", names.branch], exec, root);
+  }
+
+  const notes: string[] = [];
+  let base = `${remote}/${cfg.branches.integration}`;
+  if (opts.pushedSha) {
+    const tracked = fetchPushedBranch(root, names.branch, remote, exec);
+    if (tracked) {
+      base = `${remote}/${names.branch}`;
+      const tip = git(["rev-parse", base], exec, root).trim();
+      if (tip !== opts.pushedSha)
+        notes.push(
+          `${base} is at ${tip}, not at the recorded ${opts.pushedSha}; the worktree starts at the remote head`,
+        );
+    } else {
+      notes.push(
+        `${names.branch} is not on ${remote} although ${opts.pushedSha} was recorded as pushed; the worktree starts at ${base}`,
+      );
+    }
+  }
+  git(["worktree", "add", names.worktree, "-b", names.branch, base], exec, root);
+
+  const copied: string[] = [];
+  const missing: string[] = [];
+  for (const entry of cfg.worktrees.copy) {
+    const from = resolve(root, entry);
+    const rel = relative(root, from);
+    // Inside the project root only: a configured `../x` or an absolute path is not a file
+    // of this project, so it is reported as not copied rather than followed.
+    if (!rel || rel.startsWith("..") || isAbsolute(rel) || !existsSync(from)) {
+      missing.push(entry);
+      continue;
+    }
+    const to = join(names.worktree, rel);
+    mkdirSync(dirname(to), { recursive: true });
+    cpSync(from, to, { recursive: true });
+    copied.push(entry);
+  }
+  mkdirSync(join(names.worktree, ".autoclaude", "state", "reports"), { recursive: true });
+  return { branch: names.branch, worktree: names.worktree, copied, missing, notes };
+}
+
+/**
+ * Fetch one branch into its remote-tracking ref, so the `worktree add` that follows sees
+ * the remote's current head. True when the remote has it. A remote that answers "no such
+ * ref" is a state to fall back from; any other failure (unreachable remote) is thrown,
+ * because falling back then would quietly recreate the very state this exists to avoid.
+ */
+function fetchPushedBranch(root: string, branch: string, remote: string, exec: Exec): boolean {
+  const r = exec(
+    "git",
+    ["fetch", "--quiet", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
+    { cwd: root },
+  );
+  if (r.status === 0) return true;
+  if (/couldn't find remote ref/i.test(r.stderr)) return false;
+  throw new Error(`git fetch ${remote} ${branch} failed (exit ${r.status}): ${r.stderr.trim()}`);
+}
+
+/**
+ * Every local branch of this issue: `git branch --list "<prefix>*"`, that namespace and
+ * nothing else, split into the ones a deletion may touch and the ones git has checked out.
+ *
+ * A marked line is left out, not stripped. The listing marks the checked-out branch with
+ * `* ` and one checked out in another worktree with `+ `, and `git branch -D` refuses both
+ * with "Cannot delete branch checked out at", through the throwing `git()`, which in a
+ * rollback lands after the release and in a replacing create kills the create. Left alone
+ * and said out loud, because a branch silently kept is what the next `createWorktree` for
+ * the issue dies on.
+ *
+ * The marked names are returned as well as reported, because the caller has a second
+ * deletion to keep them out of: a branch kept locally has to keep its copy on the remote
+ * too, or the skip trades a throw for a branch with nothing behind it.
+ *
+ * Colour and columns are turned off for the parsing's sake. `color.branch` and
+ * `column.branch` are the operator's own git config, and this listing is read by hand: a
+ * decorated line wraps escape sequences around the name, in front of the marker, so the
+ * skip above stops seeing it, and a columnised one puts several names on one line.
+ *
+ * The prefix is then asked about again: a pattern git widened, or a marker it adds
+ * tomorrow, must not put a foreign name in front of `branch -D`.
+ */
+function localIssueBranches(
+  root: string,
+  issue: number,
+  cfg: ProjectConfig,
+  exec: Exec = realExec,
+): { deletable: string[]; checkedOut: string[] } {
+  const prefix = branchPrefixFor(issue, cfg);
+  const deletable: string[] = [];
+  const checkedOut: string[] = [];
+  for (const line of git(
+    ["branch", "--no-color", "--no-column", "--list", `${prefix}*`],
+    exec,
+    root,
+  ).split(/\r?\n/)) {
+    const marked = /^\s*([*+])\s+(\S.*)$/.exec(line);
+    const name = (marked ? (marked[2] ?? line) : line).trim();
+    if (!name.startsWith(prefix)) continue;
+    if (marked) {
+      console.error(
+        `issue ${issue}: leaving ${name} alone — git marks it "${marked[1]}", so it is checked out in a worktree and git branch -D would refuse it. Remove that worktree, then delete the branch.`,
+      );
+      checkedOut.push(name);
+      continue;
+    }
+    deletable.push(name);
+  }
+  return { deletable, checkedOut };
+}
+
+/**
+ * The same namespace on the remote: `git ls-remote --heads <remote> "<prefix>*"`.
+ *
+ * Asked instead of inferred from the local branches, because the two can disagree in the
+ * one direction that matters. The remote delete runs after the local one, and a push that
+ * fails on something the tolerance below does not cover throws with `branch -D` already
+ * done, so a re-run would iterate a local namespace that is now empty, exit 0, and leave
+ * the branch on the remote, where the next attempt meets the publish lease refusal. A
+ * human who removed the directory and the branch by hand is in the same position.
+ *
+ * The lines are `<sha>\trefs/heads/<branch>`; the ref prefix is stripped and the
+ * namespace asked about again, the way `localIssueBranches` re-filters. Through the
+ * throwing `git()`, deliberately: an unreachable remote has to fail loudly here, because a
+ * silent empty listing is exactly the missed deletion this exists for.
+ */
+function remoteIssueBranches(
+  root: string,
+  issue: number,
+  cfg: ProjectConfig,
+  exec: Exec = realExec,
+): string[] {
+  const prefix = branchPrefixFor(issue, cfg);
+  return git(["ls-remote", "--heads", cfg.forge.remote, `${prefix}*`], exec, root)
+    .split(/\r?\n/)
+    .map((l) => l.split(/\s+/)[1] ?? "")
+    .map((ref) => ref.replace(/^refs\/heads\//, "").trim())
+    .filter((b) => b.startsWith(prefix));
+}
+
+export function removeWorktree(
+  root: string,
+  issue: number,
+  cfg: ProjectConfig,
+  opts: { deleteRemote: boolean },
+  exec: Exec = realExec,
+): void {
+  const remote = cfg.forge.remote;
+  // A registration whose directory was deleted by hand makes `worktree remove` fail;
+  // pruning first turns that case into "nothing to remove".
+  git(["worktree", "prune"], exec, root);
+  const wt = findWorktree(root, issue, cfg, exec);
+  // The issue's own prefix, not the configured one. `findWorktree` matches on the
+  // directory name, so a directory `agent+9-foo` switched by hand to `agent/91-bar` would
+  // pass `startsWith("agent/")` and be removed by issue 9's teardown, branch and all.
+  const prefix = branchPrefixFor(issue, cfg);
+  if (wt?.branch && !wt.branch.startsWith(prefix)) {
+    throw new Error(
+      `refusing to remove ${wt.path}: its branch ${wt.branch} is not under ${prefix}, so the directory name and the branch disagree about which issue this is`,
+    );
+  }
+  if (wt) git(["worktree", "remove", "--force", wt.path], exec, root);
+  // The branches, whether or not a registration was there to name them. A teardown that
+  // returned as soon as its own prune had dropped a stale registration never ran
+  // `branch -D` or the remote delete, and a branch left on the remote is not cosmetic:
+  // the next attempt pushes the same name and the publish lease refuses a remote head the
+  // new worktree never had.
+  //
+  // The names come from the issue rather than from the caller: every branch of an issue
+  // starts with `branchPrefixFor(issue, cfg)`, and that is the only namespace this deletes
+  // in. The registration's own branch is taken as well, because a directory name and a
+  // branch name can disagree, and it is the branch the removal above just freed.
+  //
+  // Both sides are asked, not one derived from the other, and each deletes only what it
+  // found: `git branch -D` on a name that is not there fails outright.
+  //
+  // Local first, and the remote listing only afterwards: with the remote unreachable the
+  // local half still finishes, so a retry has only the remote side left to do.
+  //
+  // The registration's own branch is subject to the same skip as the listed ones: when a
+  // removal git reported as done left the checkout alive, an unconditional `branch -D` on
+  // it is the throw the skip exists to avoid.
+  const listed = localIssueBranches(root, issue, cfg, exec);
+  const kept = new Set(listed.checkedOut);
+  const local = new Set([
+    ...(wt?.branch && !kept.has(wt.branch) ? [wt.branch] : []),
+    ...listed.deletable,
+  ]);
+  for (const branch of local) git(["branch", "-D", branch], exec, root);
+  if (!opts.deleteRemote) return;
+  // Still a throw, deliberately; what the message adds is which half is done.
+  let remoteBranches: string[];
+  try {
+    remoteBranches = remoteIssueBranches(root, issue, cfg, exec);
+  } catch (error) {
+    throw new Error(
+      `issue ${issue}: the local branches are deleted (${[...local].join(", ") || "none"}) and ${remote} could not be asked about ${prefix}* — ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  for (const branch of remoteBranches) {
+    // The other half of the local skip: a branch left alone because git has it checked out
+    // somewhere keeps its copy on the remote as well. Deleting only the remote half is the
+    // state the publish lease refuses.
+    if (kept.has(branch)) {
+      console.error(
+        `issue ${issue}: leaving ${branch} on ${remote} as well, because the local copy is checked out in a worktree and was kept. Remove that worktree, then delete both halves.`,
+      );
+      continue;
+    }
+    const r = exec("git", ["push", remote, "--delete", branch], { cwd: root });
+    // A remote that turns out not to have the branch is the state this wants, not a
+    // failure to report: the listing above and this push are two round trips.
+    if (r.status !== 0 && !/remote ref does not exist|unable to delete/.test(r.stderr)) {
+      throw new Error(`git push ${remote} --delete ${branch}: ${r.stderr.trim()}`);
+    }
+  }
+}
+
+/**
+ * `create <issue> [--replace] -- <title words>`: the options stop at `--` and the title
+ * is everything after it, verbatim. The title is GitHub-controlled text; read from the
+ * same word list as the options, a title containing "--replace" armed the removal of
+ * an earlier attempt's worktree and branch.
+ */
+export function parseCreateArgs(rest: string[]): { title: string; replace: boolean } {
+  const sep = rest.indexOf("--");
+  if (sep < 0)
+    throw new Error('create <issue> [--replace] -- <title words>: the title follows "--"');
+  const options = rest.slice(0, sep);
+  const unknown = options.find((o) => o !== "--replace");
+  if (unknown) throw new Error(`create: unknown option ${unknown}`);
+  const title = rest
+    .slice(sep + 1)
+    .join(" ")
+    .trim();
+  if (!title) throw new Error("create: the title after -- is empty");
+  return { title, replace: options.includes("--replace") };
+}
