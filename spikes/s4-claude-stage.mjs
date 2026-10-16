@@ -135,12 +135,12 @@ const allowRead = { permissions: { allow: ["Read"] } };
 
 // (version / help facts)
 {
-  const v = spawnSync(CLAUDE, ["--version"], { encoding: "utf8", env: childEnv() });
-  const h = spawnSync(CLAUDE, ["--help"], { encoding: "utf8", env: childEnv() });
+  const v = spawnSync(CLAUDE, ["--version"], { encoding: "utf8", env: childEnv(), timeout: TIMEOUT_MS, input: "" });
+  const h = spawnSync(CLAUDE, ["--help"], { encoding: "utf8", env: childEnv(), timeout: TIMEOUT_MS, input: "" });
   const flags = ["--effort", "--max-turns", "--json-schema", "--settings", "--permission-mode", "--strict-mcp-config", "--mcp-config"];
   results.env = {
-    claudeBin: CLAUDE, version: v.stdout.trim(), platform: process.platform, node: process.version,
-    inheritEnv, helpMentions: Object.fromEntries(flags.map((f) => [f, h.stdout.includes(f)])),
+    claudeBin: CLAUDE, version: v.error ? `error: ${v.error.message}` : (v.stdout ?? "").trim(), platform: process.platform, node: process.version,
+    inheritEnv, helpMentions: Object.fromEntries(flags.map((f) => [f, !h.error && (h.stdout ?? "").includes(f)])),
   };
   console.log(JSON.stringify(results.env));
 }
