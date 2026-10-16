@@ -1,4 +1,4 @@
-import { changedFiles } from "./changed-files.js";
+import { changedFiles, topLevel } from "./changed-files.js";
 import { matchesAny } from "../config/globs.js";
 import type { ProjectConfig } from "../config/types.js";
 import { runShell, shQuote } from "../platform/shell.js";
@@ -9,6 +9,9 @@ export interface GateResult {
   output: string;
   durationMs: number;
 }
+
+/** A leading dash would be an option to the gate tool; "./" keeps it a path. */
+const optionSafe = (f: string): string => (f.startsWith("-") ? `./${f}` : f);
 
 const PLACEHOLDER = "{files}";
 
@@ -32,9 +35,12 @@ export async function runGates(
   opts: { fix: boolean; only?: string[]; files?: string[] },
 ): Promise<GateResult[]> {
   const gates = cfg.gates.filter((g) => opts.only === undefined || opts.only.includes(g.name));
+  // Selected paths are relative to the top level, so derived files mean running from there.
+  const derived = opts.files === undefined;
   const files =
     opts.files ?? changedFiles(worktree, `${cfg.forge.remote}/${cfg.branches.integration}`);
-  const quoted = files.map(shQuote).join(" ");
+  const cwd = derived ? topLevel(worktree) : worktree;
+  const quoted = files.map(optionSafe).map(shQuote).join(" ");
   // split/join, not replace: a quoted path may contain `$&` or `$'`, which replace expands.
   const substitute = (cmd: string): string => cmd.split(PLACEHOLDER).join(quoted);
 
@@ -52,21 +58,22 @@ export async function runGates(
       results.push(done("skipped", "no changed file matches this gate's `when`"));
       continue;
     }
-    const takesFiles = gate.check.includes(PLACEHOLDER) || gate.fix?.includes(PLACEHOLDER);
-    if (takesFiles && files.length === 0) {
+    const needs = (cmd: string | undefined): boolean => cmd?.includes(PLACEHOLDER) === true;
+    // Only the commands that will run decide: fix counts only with --fix.
+    if (files.length === 0 && needs(gate.check)) {
       results.push(done("skipped", "no changed files to check"));
       continue;
     }
     let output = "";
-    if (opts.fix && gate.fix !== undefined) {
-      const fixed = await exec(substitute(gate.fix), worktree);
+    if (opts.fix && gate.fix !== undefined && !(files.length === 0 && needs(gate.fix))) {
+      const fixed = await exec(substitute(gate.fix), cwd);
       output += fixed.output;
       if (!fixed.ok) {
         results.push(done("fail", output));
         break;
       }
     }
-    const checked = await exec(substitute(gate.check), worktree);
+    const checked = await exec(substitute(gate.check), cwd);
     output += checked.output;
     results.push(done(checked.ok ? "pass" : "fail", output));
     if (!checked.ok) break;

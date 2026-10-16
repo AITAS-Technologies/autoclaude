@@ -82,4 +82,12 @@ describe("changedFiles", () => {
     writeFileSync(join(sub, "x.ts"), "x\n");
     expect(changedFiles(dir, "up/main")).toEqual(["My Projekte Müller/x.ts"]);
   }, 30_000);
+
+  it("returns root-relative paths when called from a subdirectory", () => {
+    const dir = repo();
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "keep.txt"), "changed\n");
+    writeFileSync(join(dir, "sub", "new.ts"), "n\n");
+    expect(changedFiles(join(dir, "sub"), "up/main").sort()).toEqual(["keep.txt", "sub/new.ts"]);
+  }, 30_000);
 });

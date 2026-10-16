@@ -86,6 +86,29 @@ describe("runGates", () => {
     expect(res.map((r) => r.status)).toEqual(["skipped", "pass"]);
   });
 
+  it("keeps an option-like file name a path", async () => {
+    const dir = tmp();
+    const [r] = await runGates(cfgOf([{ name: "show", check: `${ARGV} {files}` }]), dir, {
+      fix: false,
+      files: ["-rf", "--config=x", "ok.ts"],
+    });
+    expect(JSON.parse(r!.output.trim())).toEqual(["./-rf", "./--config=x", "ok.ts"]);
+  });
+
+  it("decides the skip by the commands that run: {files} only in fix", async () => {
+    const dir = tmp();
+    const gate: Gate = { name: "lint", check: "echo checked", fix: "echo fixing {files}" };
+    const plain = await runGates(cfgOf([gate]), dir, { fix: false, files: [] });
+    expect(plain.map((r) => r.status)).toEqual(["pass"]);
+    expect(plain[0]?.output).toContain("checked");
+    const fixEmpty = await runGates(cfgOf([gate]), dir, { fix: true, files: [] });
+    expect(fixEmpty[0]?.status).toBe("pass");
+    expect(fixEmpty[0]?.output).toContain("checked");
+    expect(fixEmpty[0]?.output).not.toContain("fixing");
+    const fixFiles = await runGates(cfgOf([gate]), dir, { fix: true, files: ["a.ts"] });
+    expect(fixFiles[0]?.output).toContain("fixing a.ts");
+  });
+
   it("stops at the first failing gate", async () => {
     const dir = tmp();
     const res = await runGates(
@@ -146,6 +169,30 @@ describe("runGates", () => {
     );
     expect(res.map((r) => r.name)).toEqual(["a", "c"]);
   });
+
+  it("selects from the top level when run from a subdirectory", async () => {
+    const dir = tmp();
+    git(dir, "init", "-b", "main");
+    git(dir, "config", "user.email", "t@t");
+    git(dir, "config", "user.name", "t");
+    git(dir, "config", "core.autocrlf", "false");
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "sub", "tracked.ts"), "a\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-m", "base");
+    git(dir, "update-ref", "refs/remotes/up/main", "HEAD");
+    writeFileSync(join(dir, "sub", "tracked.ts"), "b\n");
+    writeFileSync(join(dir, "sub", "new.ts"), "n\n");
+    const [r] = await runGates(
+      cfgOf([{ name: "show", check: `${ARGV} {files}` }]),
+      join(dir, "sub"),
+      {
+        fix: false,
+      },
+    );
+    expect(r?.status).toBe("pass");
+    expect(JSON.parse(r!.output.trim()).sort()).toEqual(["sub/new.ts", "sub/tracked.ts"]);
+  }, 30_000);
 
   it("takes the changed files from git when none are given", async () => {
     const dir = tmp();
