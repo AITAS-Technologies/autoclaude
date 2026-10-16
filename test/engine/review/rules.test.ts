@@ -286,8 +286,7 @@ describe("fingerprintOf", () => {
  * They had three. Round 1 archives a `later` finding as `src/lib/a.ts`, round 2 quotes
  * the same line as the worktree-absolute path an angle reads it at, the evidence check
  * accepts that path, and the fingerprints differ — so `seenBefore` was false and the pull
- * request listed it as new instead of "noted in an earlier round" (maintainer's review of
- * pull request 2, 8).
+ * request listed it as new instead of "noted in an earlier round".
  */
 describe("normaliseQuotedPath", () => {
   it("reduces every shape a review quotes to the repository-relative path", () => {
@@ -372,7 +371,6 @@ describe("familyOf and escapeRegExp", () => {
    * comment describing one copy stood over three. A class that gains a character in one
    * place and not the others is three different escapes, and the failure mode is silent:
    * a name the regex reads as syntax matches the wrong file, or no file
-   * (maintainer's review of pull request 2, 3).
    *
    * Asserted over the source text, because that is where the duplication lives — there is
    * no behaviour to test that would tell one copy from two identical ones.
@@ -380,7 +378,7 @@ describe("familyOf and escapeRegExp", () => {
    * Recursive, and over `.mjs` as well as `.ts`: the first version read
    * `src/engine` one level deep and only `.ts`, so a fourth copy in `some-helper.mjs`
    * or under `scripts/ci/` would have passed. Neither directory has a subdirectory today,
-   * which is exactly why the narrow version looked correct (re-review, Minor 1).
+   * which is exactly why the narrow version looked correct.
    */
   it("is the only copy of the character class in the sources that use it", () => {
     const holders = ["src"].flatMap((dir) =>

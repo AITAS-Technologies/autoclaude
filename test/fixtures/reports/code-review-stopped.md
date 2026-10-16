@@ -1,5 +1,5 @@
 AUTODEV-CODE-REVIEW
-issue: 126
+issue: 42
 red-step:
 reason:
 fan-out:
@@ -8,10 +8,10 @@ criteria:
 findings:
   - rule: bug/general-case
     confidence: 8
-    file: src/server/documents/filename.ts
+    file: src/lib/format.ts
     line: 18
-    evidence: "const ascii = name.normalize('NFKD').replace(/[^\x20-\x7e]/g, '');"
-    message: Handles the umlaut class but not other Latin-1 letters such as ñ.
+    evidence: "const label = name.trim().replace(/ +/g, ' ');"
+    message: Collapses spaces but not tabs or other whitespace.
 uncertain:
-  - perf/inefficiency — the fold may run twice per download, on a path whose cost was not measured
+  - perf/inefficiency — the collapse may run twice per call, on a path whose cost was not measured
 CODE-REVIEW-STATUS: stopped

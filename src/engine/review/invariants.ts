@@ -17,8 +17,7 @@
  * It is a property of the rule and therefore of the catalogue row, not of the family the
  * id happens to start with: the check's exempt set was a prefix list in the engine, so a
  * project rule of the measurement shape was withdrawn every time it fired and the engine
- * had to be edited for each project that shipped one (maintainer's review of pull
- * request 2, 2).
+ * had to be edited for each project that shipped one.
  */
 export const EVIDENCE_KINDS = ["line", "measurement"] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];

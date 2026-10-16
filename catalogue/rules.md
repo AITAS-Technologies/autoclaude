@@ -36,7 +36,7 @@ other round, so it is the verdict they stand behind that spares them, not their 
 
 This file states nothing about any one project. Which paths are fenced, which service may
 not be bypassed, which layer owns authorisation — that is the project's half,
-`.autodev/invariants.md`, in the same grammar. `loadCatalogue()` reads both and refuses an
+`.autoclaude/invariants.md`, in the same grammar. `loadCatalogue()` reads both and refuses an
 id stated in both.
 
 | Rule id                           | Level   | What to inspect                                                                                                                          | A breach looks like                                                                                                                                                                                                                                                                            | Evidence    |

@@ -31,7 +31,7 @@ describe("parseInvariants", () => {
    * Which rules those are was a prefix list in `review-decision.ts` — `spec/`, `plan/`,
    * `paths/` — so a project shipping a measurement rule of its own had to edit the
    * engine, against the rule that the engine learns a project fact from `.autoclaude/` and
-   * nowhere else (maintainer's review of pull request 2, 2).
+   * nowhere else.
    */
   it("reads the evidence kind from the last column, and refuses a word outside the two", () => {
     const rows = parseInvariants(
@@ -67,7 +67,7 @@ describe("parseInvariants", () => {
   // passed the ">= 10" count assertion — so the reviewer would quietly stop checking
   // that invariant and every test would stay green.
   it("refuses a rule row whose id is not area/rule-name", () => {
-    expect(() => parseInvariants("| `Guard/Capitalised` | error | x | y |")).toThrow(
+    expect(() => parseInvariants("| `Layer/Capitalised` | error | x | y |")).toThrow(
       /not a rule id/,
     );
     expect(() => parseInvariants("| `no-area` | error | x | y |")).toThrow(/not a rule id/);
@@ -98,7 +98,7 @@ describe("parseInvariants", () => {
    * when the misread cell holds a word — the refusal above — and silently as `line` when
    * it happens to be empty, which puts a rule with no line to quote back under a check
    * that withdraws it. The plan asked for "a **last** column headed `Evidence`" and only
-   * the position was enforced (re-review, Minor 3).
+   * the position was enforced.
    *
    * Checked per table that holds rule rows, not per file: a prose table elsewhere in the
    * document is none of this parser's business.

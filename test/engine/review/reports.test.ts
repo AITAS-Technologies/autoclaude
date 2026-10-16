@@ -39,7 +39,7 @@ describe("parseImplementReport", () => {
   const r = parseImplementReport(fx("implement"));
 
   it("reads the scalars, an empty reason included", () => {
-    expect(r.issue).toBe(126);
+    expect(r.issue).toBe(42);
     expect(r.status).toBe("done");
     expect(r.reason).toBe("");
     expect(r.dbMigrationRequired).toBe(false);
@@ -50,15 +50,15 @@ describe("parseImplementReport", () => {
     expect(r.criteria).toHaveLength(2);
     expect(r.criteria[0]).toEqual({
       met: true,
-      text: "Ä, Ö, Ü, ä, ö, ü are preserved in the download file name",
+      text: "Leading and trailing spaces are trimmed in the formatted label",
     });
     expect(r.criteria[1]?.met).toBe(false);
   });
 
   it("reads the lists", () => {
-    expect(r.testsAdded).toContain("renderers.test.ts");
+    expect(r.testsAdded).toContain("parse.test.ts");
     expect(r.observedNotDone).toEqual([
-      "documents-route.test.ts asserts a route this change does not touch",
+      "legacy.test.ts asserts a behaviour this change does not touch",
     ]);
   });
 
@@ -86,9 +86,7 @@ describe("parseCodeReviewReport", () => {
     expect(r.findings[0]?.level).toBe("error");
     expect(r.findings[0]?.confidence).toBe(9);
     expect(r.findings[0]?.line).toBe(41);
-    expect(r.findings[0]?.evidence).toBe(
-      "it('keeps the umlauts in the Content-Disposition header', async () => {",
-    );
+    expect(r.findings[0]?.evidence).toBe("it('trims the label before it is shown', async () => {");
     expect(r.findings[2]?.level).toBe("warning");
   });
 
@@ -106,7 +104,7 @@ describe("parseCodeReviewReport", () => {
 
   // An empty findings list stays a legitimate answer — but only from a review that
   // still says what it checked. This block used to be the whole contract, and it is
-  // exactly the report PR #155 could not tell from a cursory one.
+  // exactly the report that could not be told from a cursory one.
   it("accepts an empty findings list from a review that accounts for itself", () => {
     const r2 = codeReview(
       [
@@ -131,15 +129,14 @@ describe("parseCodeReviewReport", () => {
   it("renders findings for a fix round, with the tier the implementer has to act on", () => {
     const md = findingsAsMarkdown(r.findings);
     expect(md).toContain("tests/passes-without-change");
-    expect(md).toContain("documents-route.test.ts:41");
+    expect(md).toContain("format.test.ts:41");
     expect(md).toContain("must");
     expect(md).toContain("later");
   });
 
   // `spec/criterion-not-met` — the commonest blocking rule there is — carries no file and
   // no line, and every renderer printed it as "at `:0`". `can-merge.ts` had the one
-  // version that did not; `locationOf` is that version, shared (whole-branch review,
-  // Minor 5).
+  // version that did not; `locationOf` is that version, shared.
   it("names no location for a finding that has none", () => {
     const quoteless: ReviewFinding = {
       rule: "spec/criterion-not-met",
@@ -256,10 +253,10 @@ describe("the class of a finding comes from the catalogue and the confidence", (
 describe("parsePlanReport", () => {
   it("reads status, migration and the plan file", () => {
     const r = parsePlanReport(fx("plan"));
-    expect(r.issue).toBe(56);
+    expect(r.issue).toBe(12);
     expect(r.status).toBe("planned");
     expect(r.dbMigrationRequired).toBe(false);
-    expect(r.planFile).toBe(".autoclaude/state/plans/56.md");
+    expect(r.planFile).toBe(".autoclaude/state/plans/12.md");
   });
 });
 
@@ -271,7 +268,6 @@ describe("parsePlanReport", () => {
  * implement then reaches `publish.ts` → `parseImplementReport`, where `yesNo` threw on
  * the missing `db-migration-required:` line: `scalar()` returns "" and there was no
  * alias, so the promise could not be kept and the run stopped there
- * (maintainer's review, 13).
  *
  * Tolerance for one release, in the two parsers that read the field. The skills print the
  * new name and a test pins that; this is about archives on disk, and it comes out again
@@ -299,45 +295,45 @@ describe("the field rename, read backwards for one release", () => {
   });
 });
 
-// Review of #145, H4: the parser rejected or garbled input its own contract allows.
+// The parser must not have rejected or garbled input its own contract allows.
 describe("the parser reads what the skills are allowed to print", () => {
   it("accepts a criterion written with a colon, met and not met alike", () => {
     const text = fx("implement")
       .replace(
-        "1. met — Ä, Ö, Ü, ä, ö, ü are preserved in the download file name",
+        "1. met — Leading and trailing spaces are trimmed in the formatted label",
         "1. met: the header is set",
       )
       .replace(
-        "2. not met — ß is preserved on all three operating systems (verified at unit level only)",
-        "2. not met: ß survives on all three operating systems",
+        "2. not met — Empty input yields an empty label on every platform (verified at unit level only)",
+        "2. not met: Empty input yields an empty label on every platform",
       );
     const r = parseImplementReport(text);
     expect(r.criteria).toEqual([
       { met: true, text: "the header is set" },
-      { met: false, text: "ß survives on all three operating systems" },
+      { met: false, text: "Empty input yields an empty label on every platform" },
     ]);
   });
 
   it("lets a top-level scalar wrap onto an indented second line", () => {
     const text = fx("implement").replace(
-      "tests-added: tests/unit/server/documents/renderers.test.ts, tests/unit/server/documents/orchestrator.test.ts",
-      "tests-added: tests/unit/server/documents/renderers.test.ts,\n  tests/unit/server/documents/orchestrator.test.ts",
+      "tests-added: tests/unit/lib/parse.test.ts, tests/unit/lib/render.test.ts",
+      "tests-added: tests/unit/lib/parse.test.ts,\n  tests/unit/lib/render.test.ts",
     );
     expect(parseImplementReport(text).testsAdded).toBe(
-      "tests/unit/server/documents/renderers.test.ts, tests/unit/server/documents/orchestrator.test.ts",
+      "tests/unit/lib/parse.test.ts, tests/unit/lib/render.test.ts",
     );
   });
 
   it("keeps a string list item that contains a colon as a string", () => {
     const text = fx("implement").replace(
-      "  - documents-route.test.ts asserts a route this change does not touch",
+      "  - legacy.test.ts asserts a behaviour this change does not touch",
       "  - docs: the README still names the old flag",
     );
     expect(parseImplementReport(text).observedNotDone).toEqual([
       "docs: the README still names the old flag",
     ]);
     const review = fx("code-review").replace(
-      "  - spec/out-of-scope — the ASCII slug helper may be wider than criterion 3 asked for",
+      "  - spec/out-of-scope — the shared trim helper may be wider than criterion 3 asked for",
       "  - spec/out-of-scope: the helper may be wider than asked",
     );
     // The reviewer's own lines come first, before anything the threshold withdrew.
@@ -345,7 +341,7 @@ describe("the parser reads what the skills are allowed to print", () => {
     expect(uncertain[0]).toBe("spec/out-of-scope: the helper may be wider than asked");
   });
 
-  // Re-review of #145, N4: a long reason written on the line after its key, the natural
+  // A long reason written on the line after its key, the natural
   // shape for status: blocked or needs-human, where the reason matters most.
   it("reads a scalar whose value starts on the next line", () => {
     const text = fx("implement")
@@ -365,7 +361,7 @@ describe("the parser reads what the skills are allowed to print", () => {
 describe("parsePlanReviewReport", () => {
   it("reads the plan reviewer's findings with the same shape as the code reviewer's", () => {
     const r = planReview(fx("plan-review"));
-    expect(r.issue).toBe(56);
+    expect(r.issue).toBe(12);
     expect(r.findings.map((f) => f.rule)).toEqual([
       "plan/invented-interface",
       "plan/test-asserts-mock",
@@ -415,13 +411,11 @@ describe("a rule id the reviewer wrapped in backticks or quotes", () => {
   // change published. `rule:` and `evidence:` went through `unquote` and this did not.
   it("is read as the path it names, so the evidence check can find the file", () => {
     const text = fx("code-review").replace(
-      "file: src/server/documents/filename.ts\n    line: 18",
-      "file: `src/server/documents/filename.ts`\n    line: 18",
+      "file: src/lib/format.ts\n    line: 18",
+      "file: `src/lib/format.ts`\n    line: 18",
     );
     const f = codeReview(text).findings.find((x) => x.rule === "bug/general-case");
-    expect(f?.file, "the backticks travelled into the path").toBe(
-      "src/server/documents/filename.ts",
-    );
+    expect(f?.file, "the backticks travelled into the path").toBe("src/lib/format.ts");
     // And the identity a later round compares against carries the clean path with it.
     expect(f?.fingerprint).toBe(
       fingerprintOf("bug/general-case", f?.evidence ?? "", f?.file ?? ""),
@@ -464,7 +458,7 @@ describe("the not-proven refusal points at a misspelt rule id", () => {
   });
 });
 
-// Review of #147, M13: a finding about something the file does not contain has no line
+// A finding about something the file does not contain has no line
 // to point at; `-` or a missing key reads as 0 instead of failing the whole report.
 describe("a finding without a line", () => {
   it("parses with line 0 when the reviewer writes - or omits the key", () => {
@@ -527,14 +521,14 @@ describe("a finding without a line", () => {
   });
 });
 
-// Attended run of #56 (2026-09-10): an issue with no acceptance criteria may not be
+// An issue with no acceptance criteria may not be
 // planned at all, so the plan report has a third status and it comes with no plan file.
 describe("a plan report that refuses to plan", () => {
   it("reads needs-shaping and an empty plan-file", () => {
     const r = parsePlanReport(
       [
         "AUTODEV-PLAN",
-        "issue: 56",
+        "issue: 12",
         "status: needs-shaping",
         "reason: the issue has no acceptance criteria",
         "db-migration-required: no",
@@ -542,7 +536,7 @@ describe("a plan report that refuses to plan", () => {
         "AUTODEV-PLAN-END",
       ].join("\n"),
     );
-    expect(r).toMatchObject({ issue: 56, status: "needs-shaping", planFile: "" });
+    expect(r).toMatchObject({ issue: 12, status: "needs-shaping", planFile: "" });
     expect(r.reason).toMatch(/no acceptance criteria/);
   });
   it("still refuses a status outside the three", () => {
@@ -560,7 +554,7 @@ describe("a plan report that refuses to plan", () => {
 });
 
 /**
- * A code review has to report what it *did*, not only what it found. PR #155 closed
+ * A code review has to report what it *did*, not only what it found. An earlier contract was closed
  * unmerged on exactly this: `findings: []` against 836 added lines, with no way to tell
  * a thorough review from a cursory one, because the block carried neither the red step's
  * verdict nor the per-criterion evidence although both are mandatory steps of the skill.
@@ -581,7 +575,7 @@ describe("the code review's account of itself", () => {
     expect(r.criteria).toHaveLength(3);
     expect(r.criteria[0]).toEqual({
       met: true,
-      text: "tests/unit/app/api/documents-route.test.ts:41",
+      text: "tests/unit/lib/format.test.ts:41",
     });
   });
 
@@ -664,7 +658,7 @@ describe("the code review's account of itself", () => {
    */
   it("refuses an unmet criterion that no finding accounts for", () => {
     const inconsistent = fx("code-review").replace(
-      "1. met — tests/unit/app/api/documents-route.test.ts:41",
+      "1. met — tests/unit/lib/format.test.ts:41",
       "1. not met — no evidence for the header",
     );
     expect(() => codeReview(inconsistent)).toThrow(/spec\/criterion-not-met/);
@@ -679,9 +673,9 @@ const criterionNotMet = (confidence: number, line: number) =>
   [
     "  - rule: spec/criterion-not-met",
     `    confidence: ${confidence}`,
-    "    file: src/server/documents/filename.ts",
+    "    file: src/lib/format.ts",
     `    line: ${line}`,
-    '    evidence: "export function downloadFilename(name: string) {"',
+    '    evidence: "export function formatLabel(name: string) {"',
     "    message: The criterion has no quotable evidence in the diff.",
     "",
   ].join("\n");
@@ -760,20 +754,19 @@ describe("the code review's account has to add up", () => {
    * about sign or zero: `5x` read as 5, `0` and `-1` passed, and the field is written by a
    * model rather than typed at a terminal. One rule for "is this an issue number", the one
    * `issueArg` already applies to every CLI token
-   * (maintainer's re-review of pull request 2, follow-up 7).
    */
   it("reads the issue key as decimal digits and nothing else", () => {
     // Not `" 5"`: `scalar()` trims the value, so surrounding whitespace is the block
     // parser's to drop and never reaches the number rule.
     for (const bad of ["5x", "0", "-1", "0x10", "1e2", "007", ""]) {
-      const text = fx("code-review").replace("issue: 126", `issue: ${bad}`);
+      const text = fx("code-review").replace("issue: 42", `issue: ${bad}`);
       expect(() => codeReview(text), JSON.stringify(bad)).toThrow(/is not an issue number/);
     }
     // The message names the key as well as the token: a report has more than one number.
-    expect(() => codeReview(fx("code-review").replace("issue: 126", "issue: 5x"))).toThrow(
+    expect(() => codeReview(fx("code-review").replace("issue: 42", "issue: 5x"))).toThrow(
       /"issue".*"5x"/,
     );
-    expect(codeReview(fx("code-review")).issue, "the positive control").toBe(126);
+    expect(codeReview(fx("code-review")).issue, "the positive control").toBe(42);
   });
 
   it("accepts criteria: none, and says so in the result", () => {
@@ -795,7 +788,6 @@ describe("the code review's account has to add up", () => {
  * did not parse", for the case this parser was added to remove. The line is kept with no
  * verdict instead, and the account renders it as "not stated" rather than as an unmet
  * criterion, which would be a claim nobody made
- * (maintainer's re-review of pull request 2, follow-up 2).
  */
 describe("parseStoppedCodeReview's criteria", () => {
   const withCriteria = (lines: string) =>
@@ -803,20 +795,20 @@ describe("parseStoppedCodeReview's criteria", () => {
 
   it("keeps a half-written criterion as its text, with no verdict", () => {
     const r = parseStoppedCodeReview(
-      withCriteria("  1. met — tests/unit/x.test.ts:12\n  2. the filename hel\n"),
+      withCriteria("  1. met — tests/unit/x.test.ts:12\n  2. the label hel\n"),
       { catalogue },
     );
     // The list marker is the block parser's to strip; what is kept is the line as the
     // reviewer left it, so a human can see where it was cut off.
     expect(r.criteria).toEqual([
       { met: true, text: "tests/unit/x.test.ts:12" },
-      { met: null, text: "the filename hel" },
+      { met: null, text: "the label hel" },
     ]);
     // And what a human reads says which of the three it is.
     const account = reviewAccountAsMarkdown(r).join("\n");
     expect(account).toContain("1. met — tests/unit/x.test.ts:12");
     expect(account, 'not "not met", which the reviewer never wrote').toContain(
-      "2. not stated — the filename hel",
+      "2. not stated — the label hel",
     );
   });
 
@@ -824,8 +816,8 @@ describe("parseStoppedCodeReview's criteria", () => {
   // for a list nobody can read, and the throw names the line.
   it("still refuses the same line in a completed report", () => {
     const text = fx("code-review").replace(
-      "  3. met — src/server/documents/filename.ts:18\n",
-      "  3. the filename hel\n",
+      "  3. met — src/lib/format.ts:18\n",
+      "  3. the label hel\n",
     );
     expect(() => codeReview(text)).toThrow(/must start with "met" or "not met"/);
   });
@@ -979,8 +971,8 @@ describe("the renderers group by tier", () => {
 
   it("numbers the criteria in the review account", () => {
     const account = reviewAccountAsMarkdown(r).join("\n");
-    expect(account).toContain("1. met — tests/unit/app/api/documents-route.test.ts:41");
-    expect(account).toContain("3. met — src/server/documents/filename.ts:18");
+    expect(account).toContain("1. met — tests/unit/lib/format.test.ts:41");
+    expect(account).toContain("3. met — src/lib/format.ts:18");
     expect(account).not.toContain("- met — ");
   });
 

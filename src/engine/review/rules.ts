@@ -214,8 +214,7 @@ function worktreePrefix(worktreesRoot: string): RegExp {
  * three, and the fingerprint used the weakest — so round 1 archived a `later` finding as
  * `src/lib/a.ts`, round 2 quoted the same line as the absolute path an angle read it at,
  * the evidence check accepted that path, the fingerprints differed, and the pull request
- * listed the finding as new instead of "noted in an earlier round" (maintainer's review
- * of pull request 2, 8).
+ * listed the finding as new instead of "noted in an earlier round".
  *
  * What comes off, in order:
  *
@@ -235,7 +234,7 @@ function worktreePrefix(worktreesRoot: string): RegExp {
  * which the evidence check then refuses for being outside the tree it read.
  *
  * That the prefix is any worktree's is safe rather than lax, and worth being exact about
- * (re-review, Minor 4). A quote naming a sibling worktree —
+ * A quote naming a sibling worktree —
  * `…/.autoclaude/worktrees/agent+99-other/src/a.ts` — comes out as `src/a.ts`, which the
  * evidence check re-joins against the worktree it was told to read and looks up there. So
  * it is checked against *this* tree under that name, never against the foreign checkout;

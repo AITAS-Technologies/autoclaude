@@ -9,7 +9,7 @@
  * mappings — read by an indentation-aware hand parser rather than a YAML library, so
  * the contract stays exactly what the skills print and nothing more. A block that is
  * missing, unterminated or carries a value outside the contract throws: a run that
- * ends without its block failed, whatever else it printed (phase 2a rule).
+ * ends without its block failed, whatever else it printed.
  *
  * A review block states a rule id and a confidence and **no level**. The level comes from
  * the catalogue and the class — must, should, later — from `policy()`, so the two review
@@ -43,7 +43,6 @@ export interface PlanReport {
   /**
    * `needs-shaping` is not a failed plan: it is an issue that may not be planned at all,
    * because it carries no acceptance criteria. The planner stops before reading any code
-   * (attended run of #56, 2026-09-10).
    */
   status: "planned" | "needs-human" | "needs-shaping";
   reason: string;
@@ -60,7 +59,6 @@ export interface Criterion {
    * The third state only ever comes out of `parseStoppedCodeReview`: a completed report
    * whose list cannot be read is still refused. It is not folded into `false`, because
    * "not met" is a verdict a reviewer wrote and this is a line it never finished
-   * (maintainer's re-review of pull request 2, follow-up 2).
    */
   met: boolean | null;
   text: string;
@@ -134,8 +132,7 @@ export interface ReviewFinding {
    *
    * `review-decision.ts` reads it instead of matching the rule id against a list of
    * families, which is what made a project's own measurement rule — an error rule about
-   * what the diff does not contain — withdrawn every time it fired (maintainer's review
-   * of pull request 2, 2).
+   * what the diff does not contain — withdrawn every time it fired.
    */
   evidenceKind: EvidenceKind;
   confidence: number;
@@ -186,7 +183,7 @@ export type RedStepVerdict = Verdict["kind"] | "no-test-files";
 /**
  * What a code review adds to the shared findings shape: an account of what it *did*.
  *
- * PR #155 closed unmerged on the absence of `redStep` and `criteria`. The block carried
+ * An earlier version of this contract was closed unmerged on the absence of `redStep` and `criteria`. The block carried
  * `findings: []` against 836 added lines and nothing else, so a review that skipped the
  * red step and the per-criterion check produced a byte-identical report to one that did
  * both. `fanOut` and `scoredBy` are required for the same reason and say the same kind of
@@ -213,7 +210,6 @@ export interface CodeReviewReport extends StoppedCodeReview {
  * request under "the review did not finish" — was unreachable. The strict parser refuses
  * exactly the fields such a reviewer has not written, so the result was exit 2, "the
  * report did not parse", which is the one outcome that leaves a human with nothing
- * (maintainer's review of pull request 2, 4).
  */
 export interface StoppedCodeReview extends ReviewReport {
   /** Null when the review stopped before the red step ran; a verdict otherwise. */
@@ -277,7 +273,7 @@ const BULLET = /^(?:-|\d+\.)\s+(.*)$/;
  * Which lists hold mappings. Everywhere else a bullet is a string, even when it
  * contains a colon: `1. met: the header is set` is a criterion, `- docs: the README
  * still names the old flag` is an observation. Reading those as mappings made the
- * parser reject or garble input its own contract allows (review of #145, H4).
+ * parser reject or garble input its own contract allows.
  */
 const MAPPING_LISTS: ReadonlySet<string> = new Set(["findings"]);
 
@@ -348,7 +344,7 @@ function parseBlock(lines: string[]): Block {
     }
     // A bare key whose value starts on the next line: `reason:` followed by an indented
     // sentence, the natural way to write a long reason. It is the scalar's value, not a
-    // list item (re-review of #145, N4).
+    // list item.
     if (last === undefined) {
       scalars[current] = scalars[current] ? `${scalars[current]} ${line}` : line;
       continue;
@@ -387,7 +383,7 @@ function scalar(b: Block, key: string): string {
  * so a model-written `issue: 5x` read as 5, and `0` and `-1` passed into a field the
  * archive path and the ledger lookup are keyed on. `issueArg` is the same rule the CLIs
  * apply to the token an operator types; the usage string names the key, because a report
- * carries more than one number (maintainer's re-review of pull request 2, follow-up 7).
+ * carries more than one number.
  */
 function intOf(b: Block, key: string): number {
   return issueArg(scalar(b, key), `report: "${key}"`);
@@ -409,7 +405,7 @@ const LEGACY_MIGRATION_KEY = "migration";
  * `ownerStep === "none"`, which promises such a run a resume — and an upgraded entry past
  * implement reaches `publish.ts` → `parseImplementReport`, where `yesNo` threw on the
  * line that is not there. So the promise could not be kept, and the run stopped at the
- * step that was supposed to carry it (maintainer's review, 13).
+ * step that was supposed to carry it.
  *
  * Tolerance for the archives on disk, not a second contract: the skills print the new
  * name, `orchestrate-skill.test.ts` pins that they do, and the new name wins wherever
@@ -455,7 +451,6 @@ const CRITERION = /^(met|not met)\s*(?:—|–|-|:)\s*(.*)$/;
  * the strict throw turned that into "report did not parse", exit 2, for exactly the case
  * `parseStoppedCodeReview` exists to salvage. The line is kept with no verdict rather than
  * as `not met`, which would be a claim the reviewer never made
- * (maintainer's re-review of pull request 2, follow-up 2).
  */
 function criteriaOf(b: Block, opts: { lenient?: boolean } = {}): Criterion[] {
   return strings(b, "criteria").map((line) => {
@@ -494,7 +489,7 @@ function isLevel(v: string): v is Level {
  * A finding about something the file does not contain (an uncovered criterion, a plan
  * that is really two issues) has no line, and `-`, `n/a` or no key at all reads as 0
  * instead of making the whole report unparseable — which cost a review retry and then
- * reported a real finding as a run that produced nothing (review of #147, M13).
+ * reported a real finding as a run that produced nothing.
  *
  * The first run of digits, so a reviewer who wrote `~42`, `L42` or `line 42` is read as
  * meaning 42. `parseInt` returned NaN for all three and the 0 it defaulted to was
@@ -553,7 +548,6 @@ function parseFindingsReport(
       // backticks — the markdown habit `unquote` was extended for — otherwise produced a
       // `file` with the backticks in it, `resolveQuotedFile` joined the literal name,
       // the read threw, and the finding was withdrawn as "not found within 5 lines"
-      // (maintainer's review of pull request 2, 5).
       file: unquote(item.file ?? ""),
       line: lineOf(item.line),
       evidence: unquote(item.evidence ?? ""),
@@ -748,8 +742,7 @@ export function parseCodeReviewReport(text: string, opts: ClassifyOptions): Code
     // `error` rule at exactly the threshold as a `should`, and the rubric's own rung 7 is
     // the number a cautious scorer writes — so the commonest way to arrive here is a
     // finding that was written and scored one point too low, while the message named only
-    // the rule that was missing and sent the reader looking for it (maintainer's review of
-    // pull request 2, 3).
+    // the rule that was missing and sent the reader looking for it.
     const short = report.findings.filter((f) => f.rule === CRITERION_NOT_MET && f.tier !== "must");
     const needs = (opts.threshold ?? DEFAULT_THRESHOLD) + 1;
     const found = short.length
@@ -811,8 +804,7 @@ export function parsePlanReviewReport(text: string, opts: ClassifyOptions): Plan
  * which validates every finding's confidence — so a report carrying `confidence: 9/10`
  * threw "needs confidence" out of the completeness probe, which is the ordering this
  * probe exists to prevent. Every caller parses the same text again straight afterwards,
- * where that refusal belongs and where it names the finding (maintainer's review of pull
- * request 2, 9).
+ * where that refusal belongs and where it names the finding.
  *
  * @throws only when there is no block, or none terminated by the status line: that is a
  *   text nobody can read as a report, which is the caller's "does not parse" path rather
@@ -849,7 +841,7 @@ export function reviewAccountAsMarkdown(review: StoppedCodeReview): string[] {
           // Numbered, because a finding names the criterion it is about by number. Three
           // words, not two: a line the stopped reviewer never finished says neither `met`
           // nor `not met`, and rendering it as "not met" would put a verdict in the
-          // reviewer's mouth (follow-up 2).
+          // reviewer's mouth.
           ...review.criteria.map(
             (c, i) =>
               `${i + 1}. ${c.met === null ? "not stated" : c.met ? "met" : "not met"} — ${c.text}`,
@@ -925,7 +917,7 @@ export function tierSections<T extends ReviewFinding>(
   render: (f: T) => string,
   // The intros are partial: a caller with nothing to say about a tier leaves it out. The
   // plan review's map carried `must: ""` for no other reason than this record demanding
-  // all three, on a tier its section cannot reach (maintainer's review, Later).
+  // all three, on a tier its section cannot reach.
   text: { headings: Record<Tier, string>; intro: Partial<Record<Tier, string>> },
 ): string[] {
   const byTier = findingsByTier(findings);
@@ -976,7 +968,7 @@ export function uncertainSection(lines: string[]): string[] {
  * commonest blocking rule there is, is exactly that finding: it is about what the diff
  * does not contain. Every renderer printed it as "at `:0`", a position that looks like a
  * file the reader could open. `can-merge.ts` had the one version that asked first; this
- * is that version, shared by all four callers (whole-branch review, Minor 5).
+ * is that version, shared by all four callers.
  */
 export function locationOf(f: Pick<ReviewFinding, "file" | "line">): string {
   return f.file ? `${f.file}:${f.line}` : "";

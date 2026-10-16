@@ -1,9 +1,9 @@
 AUTODEV-PLAN
-issue: 56
+issue: 12
 status: planned
 reason:
 db-migration-required: no
-plan-file: .autoclaude/state/plans/56.md
+plan-file: .autoclaude/state/plans/12.md
 files:
   - src/server/api/client.ts — modified — read and surface the response body on non-2xx
 tests-first:
