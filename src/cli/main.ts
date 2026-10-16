@@ -2,6 +2,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { VERSION } from "../version.js";
+import { gatesVerb } from "./gates.js";
 
 export interface Io {
   out(s: string): void;
@@ -11,10 +12,12 @@ export interface Io {
 export type Verb = (args: string[], io: Io) => Promise<number>;
 
 // Later tasks register their verbs here, one module per verb in src/cli/<verb>.ts.
-export const VERBS: Record<string, Verb> = {};
+export const VERBS: Record<string, Verb> = {
+  gates: (args, io) => gatesVerb(args, io, process.cwd()),
+};
 
 const USAGE =
-  "usage: autoclaude <verb> [options]\n\nverbs: (none yet)\n\n  --version  print the version\n  --help     print this text\n";
+  "usage: autoclaude <verb> [options]\n\nverbs:\n  gates      run the project quality gates\n\n  --version  print the version\n  --help     print this text\n";
 
 const defaultIo: Io = {
   out: (s) => void process.stdout.write(s),
