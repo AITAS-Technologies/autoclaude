@@ -99,7 +99,9 @@ const LOCAL_GIT = [
   "git stash list",
 ];
 const ENGINE_VERBS = ["autoclaude note", "autoclaude gates"];
-const SHELL_VERBS = ["ls", "pwd", "cd", "wc", "sort", "uniq", "find", "echo"];
+// Not `cd`, `find`, `sort` or `uniq` (R42): `find -exec|-delete|-fprint`, `sort -o` and
+// `uniq in out` execute or write, and the source product denied all four.
+const SHELL_VERBS = ["ls", "pwd", "wc", "echo"];
 
 /** File readers (the Read and Grep tools are the way to read), network tools, nested claude. */
 const DENIED_COMMANDS = [
@@ -122,7 +124,23 @@ const DENIED_COMMANDS = [
 ];
 
 const SECRET_FILES = ["//**/.env*", "//**/.git-credentials", "//**/.netrc", "//**/.npmrc"];
-const HOME_SECRETS = ["~/.ssh/**", "~/.gitconfig", "~/.npmrc"];
+const HOME_SECRETS = [
+  "~/.ssh/**",
+  "~/.gitconfig",
+  "~/.npmrc",
+  "~/.aws/**",
+  "~/.config/gh/**",
+  "~/.docker/**",
+  "~/.kube/**",
+  "~/.azure/**",
+  "~/.gnupg/**",
+  "~/.config/gcloud/**",
+];
+
+/** The characters Claude Code reads as pattern or rule syntax. No escape is documented. */
+const RULE_SYNTAX = /[*?[\]{}()]/;
+/** Seconds a hook may run before Claude Code gives up (and fails open); above the guard's own watchdog. */
+export const HOOK_TIMEOUT_SECONDS = 30;
 
 /** A forbidden-path glob, placed under the worktree: no leading `./` or `/`. */
 const underWorktree = (rule: string, glob: string): string =>
@@ -139,6 +157,10 @@ export function claudeSettings(
   autoclaudeBin: string,
   platform: NodeJS.Platform = process.platform,
 ): object {
+  if (RULE_SYNTAX.test(forShell(worktree, platform)))
+    throw new Error(
+      `the worktree path contains a character that is permission-rule syntax (* ? [ ] { } ( )), so the stage's write fence cannot be stated safely: ${worktree}`,
+    );
   const root = claudePathRule(worktree, platform);
   const allow = [
     "Read",
@@ -159,10 +181,18 @@ export function claudeSettings(
     ...DENIED_COMMANDS.flatMap(bash),
     ...SECRET_FILES.flatMap((f) => [`Edit(${f})`, `Write(${f})`, `Read(${f})`]),
     ...HOME_SECRETS.flatMap((f) => [`Edit(${f})`, `Write(${f})`, `Read(${f})`]),
-    ...cfg.forbiddenPaths.flatMap((g) => [
-      `Edit(${underWorktree(root, g)})`,
-      `Write(${underWorktree(root, g)})`,
-    ]),
+    // A stage must not write project Claude settings (R44).
+    `Edit(${root}/.claude/**)`,
+    `Write(${root}/.claude/**)`,
+    ...cfg.forbiddenPaths.flatMap((g) => {
+      // A path without glob characters names a file or a directory: deny both readings.
+      const dir = g.replace(/\/+$/, "");
+      const globs = RULE_SYNTAX.test(g) ? [g] : [dir, `${dir}/**`];
+      return globs.flatMap((x) => [
+        `Edit(${underWorktree(root, x)})`,
+        `Write(${underWorktree(root, x)})`,
+      ]);
+    }),
   ];
   return {
     permissions: { defaultMode: "dontAsk", allow, deny },
@@ -171,7 +201,13 @@ export function claudeSettings(
         {
           // Bash only: the guard parses POSIX shell, and the PowerShell tool is denied above.
           matcher: "Bash",
-          hooks: [{ type: "command", command: hookCommand(autoclaudeBin, worktree, platform) }],
+          hooks: [
+            {
+              type: "command",
+              command: hookCommand(autoclaudeBin, worktree, platform),
+              timeout: HOOK_TIMEOUT_SECONDS,
+            },
+          ],
         },
       ],
     },

@@ -235,6 +235,21 @@ describe("the hook process", () => {
     expect(run(entryOf(broken), "git status").status).toBe(2);
   });
 
+  it("blocks (exit 2) when stdin never closes", { timeout: 60_000 }, async () => {
+    const { spawn } = await import("node:child_process");
+    const line = hookCommand(bin(entryOf(build)), project);
+    const child = spawn(BASH, ["-c", line], {
+      cwd: project,
+      env: childEnv(),
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d));
+    const code = await new Promise<number | null>((res) => child.on("close", res));
+    expect(code).toBe(2);
+    expect(stderr).toMatch(/did not answer/);
+  });
+
   it("blocks when the entry file does not exist at all", () => {
     expect(run(entryOf(join(build, "nowhere")), "git status").status).toBe(2);
   });

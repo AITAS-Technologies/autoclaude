@@ -22,6 +22,17 @@ function fail(reason: unknown): never {
   process.exit(2);
 }
 
+/**
+ * A guard that hangs (stdin never closes, git stalls inside repoRoot) must block: Claude
+ * Code treats a hook timeout as non-blocking, so this fires first (the generated settings
+ * give the hook a longer `timeout`). Design § 7.5: a timeout is a refusal.
+ */
+export const WATCHDOG_MS = 20_000;
+setTimeout(
+  () => fail(`the guard did not answer within ${WATCHDOG_MS / 1000} s`),
+  WATCHDOG_MS,
+).unref();
+
 process.on("uncaughtException", fail);
 process.on("unhandledRejection", fail);
 

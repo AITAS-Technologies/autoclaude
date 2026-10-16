@@ -113,16 +113,55 @@ describe("claudeSettings", () => {
       "Bash(autoclaude gates *)",
       "Bash(ls *)",
       "Bash(pwd)",
-      "Bash(cd *)",
       "Bash(wc *)",
-      "Bash(sort *)",
-      "Bash(uniq *)",
-      "Bash(find *)",
       "Bash(echo *)",
     ])
       expect(a, r).toContain(r);
     for (const r of ["Bash(git push *)", "Bash(git fetch *)", "Bash(git merge *)", "Bash(gh *)"])
       expect(a, r).not.toContain(r);
+  });
+
+  it("allows none of cd, find, sort and uniq (R42)", () => {
+    const a = settings(wt).permissions.allow;
+    for (const v of ["cd", "find", "sort", "uniq"])
+      expect(
+        a.filter((r) => r.startsWith(`Bash(${v}`)),
+        v,
+      ).toEqual([]);
+  });
+
+  it.each(["proj*", "a?b", "d[1]", "Jürgen (old)", "x{a,b}"])(
+    "refuses a worktree path with rule syntax: %s",
+    (dir) => {
+      expect(() => settings(`/home/u/${dir}/wt`)).toThrow(/permission-rule syntax/);
+    },
+  );
+
+  it("hardens: no writes under .claude, more secret directories, literal forbidden paths", () => {
+    const d = settings(
+      wt,
+      config((c) => (c.forbiddenPaths = ["infra", "ci/*.yml"])),
+    ).permissions.deny;
+    for (const r of [
+      "Edit(//home/u/work tree/.claude/**)",
+      "Write(//home/u/work tree/.claude/**)",
+      "Read(~/.aws/**)",
+      "Edit(~/.config/gh/**)",
+      "Write(~/.gnupg/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/.kube/**)",
+      "Read(~/.azure/**)",
+      "Read(~/.docker/**)",
+      "Edit(//home/u/work tree/infra)",
+      "Edit(//home/u/work tree/infra/**)",
+      "Edit(//home/u/work tree/ci/*.yml)",
+    ])
+      expect(d, r).toContain(r);
+    expect(d).not.toContain("Edit(//home/u/work tree/ci/*.yml/**)");
+  });
+
+  it("gives the hook a timeout above the guard's watchdog", () => {
+    expect(settings(wt).hooks.PreToolUse[0]!.hooks[0]).toMatchObject({ timeout: 30 });
   });
 
   it("adds the project's fence.allow prefixes, exactly, with the space before the star", () => {
@@ -190,7 +229,7 @@ describe("claudeSettings", () => {
   });
 
   it("never mentions ~/.claude or the user's own settings", () => {
-    expect(JSON.stringify(settings(wt))).not.toMatch(/\.claude/);
+    expect(JSON.stringify(settings(wt))).not.toMatch(/~\/\.claude/);
   });
 });
 
