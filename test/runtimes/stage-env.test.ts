@@ -73,10 +73,22 @@ describe("stageEnv", () => {
   });
 
   it.skipIf(!WIN)("matches removals case-insensitively on win32", () => {
+    const scratch = tmp("ac-stage-");
     const env = stageEnv(
-      { Gh_Token: "x", Path: "p", Cdpath: "c", Claudecode: "1", Git_Config_Parameters: "'a.b=c'" },
-      { scratchDir: tmp("ac-stage-") },
+      {
+        Gh_Config_Dir: "/real/gh",
+        Gh_Token: "x",
+        Path: "p",
+        Cdpath: "c",
+        Claudecode: "1",
+        Git_Config_Parameters: "'a.b=c'",
+      },
+      { scratchDir: scratch },
     );
+    expect(env.Path).toBe("p");
+    const ghKeys = Object.keys(env).filter((k) => k.toLowerCase() === "gh_config_dir");
+    expect(ghKeys).toHaveLength(1);
+    expect(env[ghKeys[0]!]).toBe(join(scratch, "gh"));
     expect(get(env, "GH_TOKEN")).toBeUndefined();
     expect(get(env, "CDPATH")).toBeUndefined();
     expect(get(env, "CLAUDECODE")).toBeUndefined();
@@ -189,6 +201,7 @@ describe("stageEnv against real git and gh", () => {
       env: stageEnv(process.env, { scratchDir: scratch }),
     });
     const lines = r.stdout.replace(/\r?\n$/, "").split(/\r?\n/);
+    expect(r.status).toBe(0);
     expect(lines.at(-1)).toBe("");
   });
 

@@ -78,6 +78,7 @@ export function stageEnv(base: NodeJS.ProcessEnv, opts: { scratchDir: string }):
 
   const ghDir = join(opts.scratchDir, "gh");
   mkdirSync(ghDir, { recursive: true });
+  take("GH_CONFIG_DIR");
   env.GH_CONFIG_DIR = ghDir;
   take("GIT_TERMINAL_PROMPT");
   take("GCM_INTERACTIVE");
