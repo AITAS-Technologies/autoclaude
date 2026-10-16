@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { processStartTime } from "../../src/platform/kill.js";
 import { bashPath, runShell, runShellSync, shQuote } from "../../src/platform/shell.js";
@@ -37,7 +37,11 @@ describe("spawn", () => {
   it("round-trips cwd with space and umlaut", async () => {
     const dir = tmp("Jürgen Müller ");
     const r = await run(process.execPath, [ECHO], { cwd: dir });
-    expect(JSON.parse(r.stdout).cwd).toBe(realpathSync.native(dir));
+    // Normalise both sides: the child may report an 8.3 short temp path (Windows runners).
+    const cwd: string = JSON.parse(r.stdout).cwd;
+    expect(realpathSync.native(cwd)).toBe(realpathSync.native(dir));
+    expect(basename(realpathSync.native(cwd))).toBe(basename(realpathSync.native(dir)));
+    expect(basename(cwd)).toMatch(/^Jürgen Müller /);
   });
 
   it("runSync passes argv verbatim and reports status", () => {
