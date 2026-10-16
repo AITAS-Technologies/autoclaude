@@ -59,7 +59,7 @@ extracted first and finished here.
 5. **A usage budget per project.** Each project sets two thresholds per runtime — a
    percentage of the five-hour window and a percentage of the weekly window. The usage is
    the account's, shared by every project on the machine; each project's orchestrator stops
-   starting work when the shared usage reaches *its own* threshold and resumes after the
+   starting work when the shared usage reaches _its own_ threshold and resumes after the
    window resets. Projects at 50 % stop before a project at 70 %.
 6. **A daily rhythm.** Once a day, at a configured time, autoclaude triages the issues
    that have no agent label yet (§ 5, C15) and the `needs-shaping` issues a human has
@@ -137,45 +137,45 @@ extracted first and finished here.
 
 ## 4. Decisions taken by the owner
 
-| # | Decision |
-|---|---|
-| D1 | Name `autoclaude`; its own public repository, so developers can download it and use it on their own repositories |
-| D2 | Target projects may be in any language |
-| D3 | Forge: GitHub only |
-| D4 | Runtimes: Claude Code and Codex |
-| D5 | Orchestrator and stages run on Windows, macOS and Linux |
-| D6 | Daily triage, then priority-ordered work; report only when human input is needed |
-| D7 | Budget: per project, a five-hour threshold **and** a weekly threshold, against the shared account usage; one orchestrator per project |
-| D8 | Fallback to the other subscription is configurable per project when the developer has both |
-| D9 | Notification is the `@` mention in a comment on the issue or pull request; no e-mail |
+| #   | Decision                                                                                                                                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | Name `autoclaude`; its own public repository, so developers can download it and use it on their own repositories                                                             |
+| D2  | Target projects may be in any language                                                                                                                                       |
+| D3  | Forge: GitHub only                                                                                                                                                           |
+| D4  | Runtimes: Claude Code and Codex                                                                                                                                              |
+| D5  | Orchestrator and stages run on Windows, macOS and Linux                                                                                                                      |
+| D6  | Daily triage, then priority-ordered work; report only when human input is needed                                                                                             |
+| D7  | Budget: per project, a five-hour threshold **and** a weekly threshold, against the shared account usage; one orchestrator per project                                        |
+| D8  | Fallback to the other subscription is configurable per project when the developer has both                                                                                   |
+| D9  | Notification is the `@` mention in a comment on the issue or pull request; no e-mail                                                                                         |
 | D10 | Auto-merge into the integration branch: allowed by the `automerge-dev` issue label, which only a human may set; `bug` and `documentation` by default; all of it configurable |
-| D11 | No machine account: autoclaude uses the developer's own GitHub login |
+| D11 | No machine account: autoclaude uses the developer's own GitHub login                                                                                                         |
 
 ## 5. Calls made by the designer (owner may overturn)
 
-| # | Call | Reason |
-|---|---|---|
-| C1 | The orchestrator becomes a **deterministic Node process**; every stage is a **separate headless CLI process** (`claude -p` / `codex exec`) with the worktree as its working directory | runtime- and OS-neutral; restores per-stage cost, turn caps and exit codes, which the source pipeline gave up by dispatching through the `Agent` tool; removes a failure class seen in practice (a subagent that stopped to wait for a background command was taken for finished, and its late report was lost); the source orchestrator's long prose state machine only relays decisions its scripts already compute |
-| C2 | The **code review's fan-out** (nine angles, a scorer) is driven by the orchestrator as separate processes; the red step, path gates and report assembly are engine code | same as C1; how the review ran becomes a recorded fact instead of model prose |
-| C3 | **Stage prompts are templates rendered by the engine**, not skills a runtime has to discover. Optional export as skills for interactive use | skill discovery differs per runtime (`.claude/skills` vs `.agents/skills`); the orchestrator dispatches the payload anyway |
-| C4 | The four superpowers procedures the stages use (test-driven-development, systematic-debugging, receiving-code-review, verification-before-completion) are **vendored** into the prompts, with the MIT notice | Codex has no plugin mechanism for them; a missing skill fails a stage silently |
-| C5 | **Models read, the engine writes.** Stage processes run without forge credentials in their environment; issue and PR data they need is prefetched. This is environment sanitising plus the fence, **not** OS-level isolation (residual risk in § 7.4) | strictly stronger than the source pipeline, whose sessions hold the developer's full `gh` login; real isolation is out of reach on native Windows while the CLIs need the developer's own subscription login |
-| C6 | Engine shipped as **compiled JavaScript**; no `tsx` at run time | hook latency (resolving `npx tsx` measured 1.8 s per call, paid 30–40 times per issue) and no dependency on a project's `node_modules` |
-| C7 | Project configuration in `.autoclaude/`, **committed** to the project, with a gitignored `config.local.json` for the developer's own values (C20); runtime state in `.autoclaude/state/`, gitignored, in the project's main checkout | reviewable config, per-project state, per-developer budget |
-| C8 | "Only a human may set `automerge-dev`" rests on three layers rather than on the label's actor: stage processes hold no forge credential (C5), the guard refuses label commands on these labels, the engine never sets them. Same for the category labels. Residual risk as in § 7.4 | with one shared account GitHub cannot tell the developer's label from the engine's, so an actor check would prove nothing |
-| C9 | Stages already running when a threshold is reached **finish**; only new stages are held | killing a stage wastes what it consumed; the overshoot is bounded by concurrency × one stage |
-| C10 | Fresh repository without the source history | the history carries private details of the source project |
-| C11 | `autoclaude review --pr <n>` replaces the hand-run review skill on an open pull request | works for both runtimes, same pipeline as unattended |
-| C12 | **Author trust.** Only issues opened by a user with write access to the repository are triaged, claimed or merged; comments by users without write access are left out of every payload and never count as a human answer. A template that applies `bug` to an outside author's issue therefore qualifies nothing | target repositories may be public; without this, anyone could open an issue that ends in an auto-merge |
-| C13 | **Triage applies `agent-ready` itself**, and work starts without a human veto window | D6; this drops the source pipeline's rule that only a human curates the queue, listed in § 10 |
-| C14 | **Re-triage may promote** an answered `needs-shaping` issue to `agent-ready` when the acceptance criteria now stand in a trusted human's own words (body or comment), or a trusted human's comment explicitly approves the criteria triage proposed. Never on criteria only triage wrote | keeps the rule "an agent is never graded against criteria it wrote itself" while letting a reply, not a label click, be the human's input |
-| C15 | **First sweep is opt-in.** `triage.since` defaults to the day a project enrols; older issues are triaged only when a human adds the opt-in label (default `agent-triage`). `triage.maxPerDay` caps a sweep | an existing backlog of dozens of issues would otherwise get a comment each on day one, and a budget spike |
-| C16 | **Falling behind is not a refusal.** Auto-merge runs a merge queue (§ 12): only the front pull request is rebased; a conflict-free rebase with an unchanged patch id keeps its review; CI must be green again; the merge re-reads the integration tip under a lock and uses `--match-head-commit` | with concurrency 2 and several open PRs nearly every second merge leaves another PR behind; a full re-review per rebase costs nine angles and a scorer each time; this is the source pipeline's own design answer, never built until now |
-| C17 | **If Claude usage cannot be read headless (spike S1 fails),** the Claude budget degrades to the source pipeline's bounds — the caps and the hard-limit pause, now detected by code — and `status` says "budget not enforced: usage unreadable" in every frame. Whether that is acceptable is put to the owner with the S1 result | "unknown means hold" would stop a Claude-only machine for good; a silent fallback would break the anti-goal against silent stops |
-| C18 | **Codex on Windows is in scope.** Spike S3 decides the route: Codex commands run through a POSIX shell the guard can read, if Codex can be configured that way; otherwise a PowerShell grammar in the guard becomes Phase 3 work. Until one exists, `doctor` refuses Codex on Windows | Windows developers are a primary audience; D4 and D8 would otherwise never work for them |
-| C20 | **Personal overrides.** `.autoclaude/config.local.json`, gitignored, may override only the keys that belong to a developer rather than a project: `budget`, `schedule`, the `runtime`/`model`/`effort`/`fallback` of each stage, and `humans`. Any other key in it is a load error | thresholds, triage time, concurrency and runtime choice depend on the developer's subscriptions; committed in the project they would be shared by everyone on a team |
-| C21 | **One instruction file for both runtimes.** Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`. The runtime adapter makes each stage read whichever the project has (for Codex `project_doc_fallback_filenames`; for Claude Code an import or an appended system prompt); `doctor` warns when a project has neither | a project written for one runtime must not lose its instructions on the other |
-| C19 | `autoclaude status` has a **"Waiting for you"** section: every issue or pull request whose next step is a human's, with the reason and a link | with one shared login GitHub sends the developer no notification for autoclaude's own comments; the developer needs one place to look |
+| #   | Call                                                                                                                                                                                                                                                                                                                             | Reason                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | The orchestrator becomes a **deterministic Node process**; every stage is a **separate headless CLI process** (`claude -p` / `codex exec`) with the worktree as its working directory                                                                                                                                            | runtime- and OS-neutral; restores per-stage cost, turn caps and exit codes, which the source pipeline gave up by dispatching through the `Agent` tool; removes a failure class seen in practice (a subagent that stopped to wait for a background command was taken for finished, and its late report was lost); the source orchestrator's long prose state machine only relays decisions its scripts already compute |
+| C2  | The **code review's fan-out** (nine angles, a scorer) is driven by the orchestrator as separate processes; the red step, path gates and report assembly are engine code                                                                                                                                                          | same as C1; how the review ran becomes a recorded fact instead of model prose                                                                                                                                                                                                                                                                                                                                         |
+| C3  | **Stage prompts are templates rendered by the engine**, not skills a runtime has to discover. Optional export as skills for interactive use                                                                                                                                                                                      | skill discovery differs per runtime (`.claude/skills` vs `.agents/skills`); the orchestrator dispatches the payload anyway                                                                                                                                                                                                                                                                                            |
+| C4  | The four superpowers procedures the stages use (test-driven-development, systematic-debugging, receiving-code-review, verification-before-completion) are **vendored** into the prompts, with the MIT notice                                                                                                                     | Codex has no plugin mechanism for them; a missing skill fails a stage silently                                                                                                                                                                                                                                                                                                                                        |
+| C5  | **Models read, the engine writes.** Stage processes run without forge credentials in their environment; issue and PR data they need is prefetched. This is environment sanitising plus the fence, **not** OS-level isolation (residual risk in § 7.4)                                                                            | strictly stronger than the source pipeline, whose sessions hold the developer's full `gh` login; real isolation is out of reach on native Windows while the CLIs need the developer's own subscription login                                                                                                                                                                                                          |
+| C6  | Engine shipped as **compiled JavaScript**; no `tsx` at run time                                                                                                                                                                                                                                                                  | hook latency (resolving `npx tsx` measured 1.8 s per call, paid 30–40 times per issue) and no dependency on a project's `node_modules`                                                                                                                                                                                                                                                                                |
+| C7  | Project configuration in `.autoclaude/`, **committed** to the project, with a gitignored `config.local.json` for the developer's own values (C20); runtime state in `.autoclaude/state/`, gitignored, in the project's main checkout                                                                                             | reviewable config, per-project state, per-developer budget                                                                                                                                                                                                                                                                                                                                                            |
+| C8  | "Only a human may set `automerge-dev`" rests on three layers rather than on the label's actor: stage processes hold no forge credential (C5), the guard refuses label commands on these labels, the engine never sets them. Same for the category labels. Residual risk as in § 7.4                                              | with one shared account GitHub cannot tell the developer's label from the engine's, so an actor check would prove nothing                                                                                                                                                                                                                                                                                             |
+| C9  | Stages already running when a threshold is reached **finish**; only new stages are held                                                                                                                                                                                                                                          | killing a stage wastes what it consumed; the overshoot is bounded by concurrency × one stage                                                                                                                                                                                                                                                                                                                          |
+| C10 | Fresh repository without the source history                                                                                                                                                                                                                                                                                      | the history carries private details of the source project                                                                                                                                                                                                                                                                                                                                                             |
+| C11 | `autoclaude review --pr <n>` replaces the hand-run review skill on an open pull request                                                                                                                                                                                                                                          | works for both runtimes, same pipeline as unattended                                                                                                                                                                                                                                                                                                                                                                  |
+| C12 | **Author trust.** Only issues opened by a user with write access to the repository are triaged, claimed or merged; comments by users without write access are left out of every payload and never count as a human answer. A template that applies `bug` to an outside author's issue therefore qualifies nothing                | target repositories may be public; without this, anyone could open an issue that ends in an auto-merge                                                                                                                                                                                                                                                                                                                |
+| C13 | **Triage applies `agent-ready` itself**, and work starts without a human veto window                                                                                                                                                                                                                                             | D6; this drops the source pipeline's rule that only a human curates the queue, listed in § 10                                                                                                                                                                                                                                                                                                                         |
+| C14 | **Re-triage may promote** an answered `needs-shaping` issue to `agent-ready` when the acceptance criteria now stand in a trusted human's own words (body or comment), or a trusted human's comment explicitly approves the criteria triage proposed. Never on criteria only triage wrote                                         | keeps the rule "an agent is never graded against criteria it wrote itself" while letting a reply, not a label click, be the human's input                                                                                                                                                                                                                                                                             |
+| C15 | **First sweep is opt-in.** `triage.since` defaults to the day a project enrols; older issues are triaged only when a human adds the opt-in label (default `agent-triage`). `triage.maxPerDay` caps a sweep                                                                                                                       | an existing backlog of dozens of issues would otherwise get a comment each on day one, and a budget spike                                                                                                                                                                                                                                                                                                             |
+| C16 | **Falling behind is not a refusal.** Auto-merge runs a merge queue (§ 12): only the front pull request is rebased; a conflict-free rebase with an unchanged patch id keeps its review; CI must be green again; the merge re-reads the integration tip under a lock and uses `--match-head-commit`                                | with concurrency 2 and several open PRs nearly every second merge leaves another PR behind; a full re-review per rebase costs nine angles and a scorer each time; this is the source pipeline's own design answer, never built until now                                                                                                                                                                              |
+| C17 | **If Claude usage cannot be read headless (spike S1 fails),** the Claude budget degrades to the source pipeline's bounds — the caps and the hard-limit pause, now detected by code — and `status` says "budget not enforced: usage unreadable" in every frame. Whether that is acceptable is put to the owner with the S1 result | "unknown means hold" would stop a Claude-only machine for good; a silent fallback would break the anti-goal against silent stops                                                                                                                                                                                                                                                                                      |
+| C18 | **Codex on Windows is in scope.** Spike S3 decides the route: Codex commands run through a POSIX shell the guard can read, if Codex can be configured that way; otherwise a PowerShell grammar in the guard becomes Phase 3 work. Until one exists, `doctor` refuses Codex on Windows                                            | Windows developers are a primary audience; D4 and D8 would otherwise never work for them                                                                                                                                                                                                                                                                                                                              |
+| C20 | **Personal overrides.** `.autoclaude/config.local.json`, gitignored, may override only the keys that belong to a developer rather than a project: `budget`, `schedule`, the `runtime`/`model`/`effort`/`fallback` of each stage, and `humans`. Any other key in it is a load error                                               | thresholds, triage time, concurrency and runtime choice depend on the developer's subscriptions; committed in the project they would be shared by everyone on a team                                                                                                                                                                                                                                                  |
+| C21 | **One instruction file for both runtimes.** Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`. The runtime adapter makes each stage read whichever the project has (for Codex `project_doc_fallback_filenames`; for Claude Code an import or an appended system prompt); `doctor` warns when a project has neither          | a project written for one runtime must not lose its instructions on the other                                                                                                                                                                                                                                                                                                                                         |
+| C19 | `autoclaude status` has a **"Waiting for you"** section: every issue or pull request whose next step is a human's, with the reason and a link                                                                                                                                                                                    | with one shared login GitHub sends the developer no notification for autoclaude's own comments; the developer needs one place to look                                                                                                                                                                                                                                                                                 |
 
 ## 6. What carries over, what is rebuilt
 
@@ -191,18 +191,18 @@ project facts.
 
 **Is rebuilt or generalised:**
 
-| In the source pipeline | Problem | In autoclaude |
-|---|---|---|
-| orchestrator = a prose skill run by a model on every tick | Claude-only; relays computed decisions | orchestrator module; decision table in code with a unit test over every (state, stage) pair |
-| review fan-out through the `Agent` tool | Claude-only; completion notifications can reach the wrong level | engine-driven parallel processes |
-| PowerShell launcher with Task Scheduler | Windows only | `autoclaude service install` for Task Scheduler, launchd, systemd user units |
-| engine invoked as `node node_modules/tsx/… scripts/…` from prompts and allowlists | host-repository path and host `node_modules` | `autoclaude <verb>` |
-| red step with one test runner's globs, aliases and JSON | one stack | test-runner contract from config (§ 8.3) |
-| formatter check with one formatter, resolved from the engine's own location | one stack, wrong resolution once standalone | a gate command with a `{files}` placeholder; file selection stays engine code |
-| migration lint importing the host's CI script | host code | a gate command with a `when` path filter |
-| hand-written runtime permission file and hooks | Claude Code format, host paths | generated per run by the runtime adapter from the project config |
-| usage "not readable"; learned ceiling; a free-text limit note from the model | no real budget | read from the runtimes (§ 9) |
-| sessions hold the developer's `gh` and git credentials | the fence is the only thing between a model and a push or merge | stage processes without forge credentials; the engine writes (§ 7.4) |
+| In the source pipeline                                                            | Problem                                                         | In autoclaude                                                                               |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| orchestrator = a prose skill run by a model on every tick                         | Claude-only; relays computed decisions                          | orchestrator module; decision table in code with a unit test over every (state, stage) pair |
+| review fan-out through the `Agent` tool                                           | Claude-only; completion notifications can reach the wrong level | engine-driven parallel processes                                                            |
+| PowerShell launcher with Task Scheduler                                           | Windows only                                                    | `autoclaude service install` for Task Scheduler, launchd, systemd user units                |
+| engine invoked as `node node_modules/tsx/… scripts/…` from prompts and allowlists | host-repository path and host `node_modules`                    | `autoclaude <verb>`                                                                         |
+| red step with one test runner's globs, aliases and JSON                           | one stack                                                       | test-runner contract from config (§ 8.3)                                                    |
+| formatter check with one formatter, resolved from the engine's own location       | one stack, wrong resolution once standalone                     | a gate command with a `{files}` placeholder; file selection stays engine code               |
+| migration lint importing the host's CI script                                     | host code                                                       | a gate command with a `when` path filter                                                    |
+| hand-written runtime permission file and hooks                                    | Claude Code format, host paths                                  | generated per run by the runtime adapter from the project config                            |
+| usage "not readable"; learned ceiling; a free-text limit note from the model      | no real budget                                                  | read from the runtimes (§ 9)                                                                |
+| sessions hold the developer's `gh` and git credentials                            | the fence is the only thing between a model and a push or merge | stage processes without forge credentials; the engine writes (§ 7.4)                        |
 
 ## 7. Architecture
 
@@ -333,51 +333,60 @@ executes, `autoclaude doctor` refuses the pair (C18).
 ```ts
 interface Runtime {
   name: "claude" | "codex";
-  available(): Promise<Availability>;              // installed, logged in, version
+  available(): Promise<Availability>; // installed, logged in, version
   runStage(req: StageRequest): Promise<StageResult>;
-  readUsage(): Promise<UsageSnapshot | Unknown>;   // § 9
+  readUsage(): Promise<UsageSnapshot | Unknown>; // § 9
   fence(project: ProjectConfig, worktree: string): FenceFiles; // generated per run
 }
 
 interface StageRequest {
-  cwd: string; prompt: string; dispatchFile: string; outputFile: string;
-  model: string; effort: "low" | "medium" | "high" | "max";
-  schema?: JsonSchema; timeoutMs: number; maxTurns?: number;
+  cwd: string;
+  prompt: string;
+  dispatchFile: string;
+  outputFile: string;
+  model: string;
+  effort: "low" | "medium" | "high" | "max";
+  schema?: JsonSchema;
+  timeoutMs: number;
+  maxTurns?: number;
 }
 
 interface StageResult {
   exit: "ok" | "failed" | "timeout" | "limit" | "refused";
-  limitResetsAt?: Date; tokens?: TokenUsage; costUsd?: number;
-  transcriptPath: string; errorClass?: "auth" | "quota" | "config" | "network" | "unknown";
+  limitResetsAt?: Date;
+  tokens?: TokenUsage;
+  costUsd?: number;
+  transcriptPath: string;
+  errorClass?: "auth" | "quota" | "config" | "network" | "unknown";
 }
 ```
 
 Known mappings (vendor documentation as of 2026-10-16):
 
-| | Claude Code | Codex CLI |
-|---|---|---|
-| headless run | `claude -p --output-format json` | `codex exec --json` |
-| model / effort | `--model`, `--effort` | `-m`, `-c model_reasoning_effort=…` |
-| structured output | `--json-schema` | `--output-schema`, `-o` |
-| working dir | process cwd | `-C` |
-| pre-command hook | `PreToolUse` via `--settings`, exit 2 blocks | `PreToolUse`-style hooks, exit 2 or JSON deny; trust-hashed; fail open on hook error |
-| permissions | `--permission-mode dontAsk` + allow/deny | sandbox `workspace-write` + execpolicy `.rules`; `exec` forces approval `never` |
-| MCP | `--mcp-config` + `--strict-mcp-config` | `[mcp_servers.*]`, `-c` overrides |
-| usage | status line `rate_limits.five_hour` / `seven_day` with `used_percentage`, `resets_at` (headless: unverified) | `codex app-server` → `account/rateLimits/read` (`primary`/`secondary`, `usedPercent`, `resetsAt`) |
-| limit hit | "You've hit your session/weekly limit · resets …" (exit code unverified) | `turn.failed`/`error`, exit 1, localised "Try again at …" text |
+|                   | Claude Code                                                                                                  | Codex CLI                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| headless run      | `claude -p --output-format json`                                                                             | `codex exec --json`                                                                               |
+| model / effort    | `--model`, `--effort`                                                                                        | `-m`, `-c model_reasoning_effort=…`                                                               |
+| structured output | `--json-schema`                                                                                              | `--output-schema`, `-o`                                                                           |
+| working dir       | process cwd                                                                                                  | `-C`                                                                                              |
+| pre-command hook  | `PreToolUse` via `--settings`, exit 2 blocks                                                                 | `PreToolUse`-style hooks, exit 2 or JSON deny; trust-hashed; fail open on hook error              |
+| permissions       | `--permission-mode dontAsk` + allow/deny                                                                     | sandbox `workspace-write` + execpolicy `.rules`; `exec` forces approval `never`                   |
+| MCP               | `--mcp-config` + `--strict-mcp-config`                                                                       | `[mcp_servers.*]`, `-c` overrides                                                                 |
+| usage             | status line `rate_limits.five_hour` / `seven_day` with `used_percentage`, `resets_at` (headless: unverified) | `codex app-server` → `account/rateLimits/read` (`primary`/`secondary`, `usedPercent`, `resetsAt`) |
+| limit hit         | "You've hit your session/weekly limit · resets …" (exit code unverified)                                     | `turn.failed`/`error`, exit 1, localised "Try again at …" text                                    |
 
 ## 8. The project contract
 
 ### 8.1 `.autoclaude/` in a project
 
-| File | Content |
-|---|---|
-| `config.json` | everything below; validated strictly, unknown keys refused; committed |
-| `config.local.json` | gitignored; the developer's own `budget`, `schedule`, stage runtime/model choice and `humans`, nothing else (C20) |
-| `project.md` | six optional headings (schema changes, test doubles, high-stakes areas, localisation, commit conventions, bootstrap traps); an absent heading means the clause that reads it does not apply — never that the agent improvises |
-| `invariants.md` | the project half of the rule catalogue, same grammar; an id also present in the engine half is a load error |
-| `mcp.<runtime>.json` | optional MCP servers per runtime |
-| `state/` | gitignored: ledger, events, reports archive, control files, lock |
+| File                 | Content                                                                                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.json`        | everything below; validated strictly, unknown keys refused; committed                                                                                                                                                         |
+| `config.local.json`  | gitignored; the developer's own `budget`, `schedule`, stage runtime/model choice and `humans`, nothing else (C20)                                                                                                             |
+| `project.md`         | six optional headings (schema changes, test doubles, high-stakes areas, localisation, commit conventions, bootstrap traps); an absent heading means the clause that reads it does not apply — never that the agent improvises |
+| `invariants.md`      | the project half of the rule catalogue, same grammar; an id also present in the engine half is a load error                                                                                                                   |
+| `mcp.<runtime>.json` | optional MCP servers per runtime                                                                                                                                                                                              |
+| `state/`             | gitignored: ledger, events, reports archive, control files, lock                                                                                                                                                              |
 
 The project's own agent instructions stay where the project keeps them, `CLAUDE.md` or
 `AGENTS.md` at its root; autoclaude makes both runtimes read the one that exists (C21).
@@ -390,72 +399,112 @@ checks config, labels, commands, runtimes, the `gh` login (and warns when its to
 
 ```jsonc
 {
-  "autoclaude": ">=0.1.0",                       // refuse to run on an older engine
+  "autoclaude": ">=0.1.0", // refuse to run on an older engine
   "forge": { "remote": "origin" },
   "branches": { "integration": "develop", "production": "main" },
-  "humans": ["your-github-handle"],              // mentioned when input is needed
-  "bootstrap": "npm ci",                          // run by the engine, not the model
-  "gates": [                                      // run in order by implementer and publish
-    { "name": "format", "check": "npx prettier --check {files}", "fix": "npx prettier --write {files}" },
+  "humans": ["your-github-handle"], // mentioned when input is needed
+  "bootstrap": "npm ci", // run by the engine, not the model
+  "gates": [
+    // run in order by implementer and publish
+    {
+      "name": "format",
+      "check": "npx prettier --check {files}",
+      "fix": "npx prettier --write {files}",
+    },
     { "name": "lint", "check": "npm run lint" },
     { "name": "typecheck", "check": "npm run typecheck" },
     { "name": "test", "check": "npm test" },
     { "name": "build", "check": "npm run build" },
-    { "name": "migration-lint", "check": "./scripts/lint-migrations.sh {files}",
-      "when": ["db/migrations/**"] }
+    {
+      "name": "migration-lint",
+      "check": "./scripts/lint-migrations.sh {files}",
+      "when": ["db/migrations/**"],
+    },
   ],
   "redStep": {
     "testFiles": ["tests/**/*.test.ts", "src/**/*.test.ts"],
     "supportFiles": ["tests/helpers/**"],
     "exclude": ["tests/e2e/**"],
     "run": "npx vitest run --reporter=junit --outputFile={report} {files}",
-    "result": "junit",                            // junit | exit-code
-    "install": { "when": "package-lock.json", "run": "npm ci" }
+    "result": "junit", // junit | exit-code
+    "install": { "when": "package-lock.json", "run": "npm ci" },
   },
   "worktrees": { "root": ".autoclaude/worktrees", "copy": [".env.local"] },
   "stages": {
-    "triage":     { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
-    "plan":       { "runtime": "claude", "model": "claude-opus-5-5",   "effort": "high",
-                    "fallback": { "runtime": "codex", "model": "<codex model>", "effort": "high" } },
-    "planReview": { "runtime": "claude", "model": "claude-opus-5-5",   "effort": "medium" },
-    "implement":  { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
-    "codeReview": { "angles": { "default":  { "runtime": "claude", "model": "claude-sonnet-5-5" },
-                                "security": { "runtime": "claude", "model": "claude-opus-5-5" } },
-                    "scorer": { "runtime": "claude", "model": "claude-sonnet-5-5" } }
+    "triage": { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+    "plan": {
+      "runtime": "claude",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "fallback": { "runtime": "codex", "model": "<codex model>", "effort": "high" },
+    },
+    "planReview": { "runtime": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "implement": { "runtime": "claude", "model": "claude-sonnet-5-5", "effort": "medium" },
+    "codeReview": {
+      "angles": {
+        "default": { "runtime": "claude", "model": "claude-sonnet-5-5" },
+        "security": { "runtime": "claude", "model": "claude-opus-5-5" },
+      },
+      "scorer": { "runtime": "claude", "model": "claude-sonnet-5-5" },
+    },
   },
   "budget": {
     "claude": { "fiveHourPct": 80, "weeklyPct": 90 },
-    "codex":  { "fiveHourPct": 70, "weeklyPct": 85 }
+    "codex": { "fiveHourPct": 70, "weeklyPct": 85 },
   },
   "schedule": { "timezone": "Europe/Berlin", "triageAt": "06:00", "concurrency": 2 },
   "triage": { "since": "2026-11-01", "optInLabel": "agent-triage", "maxPerDay": 10 },
   "queue": {
     "ready": "agent-ready",
-    "priority": ["priority: critical", "priority: high"]   // first match wins; unlabeled last; ties: oldest
+    "priority": ["priority: critical", "priority: high"], // first match wins; unlabeled last; ties: oldest
   },
   "automerge": {
     "enabled": true,
     "label": "automerge-dev",
     "categories": ["bug", "documentation"],
-    "method": "squash"
+    "method": "squash",
   },
-  "humanApproval": [                               // paths that need a human's label to merge
-    { "paths": ["db/migrations/**"], "label": "agent-migration-ok" }
+  "humanApproval": [
+    // paths that need a human's label to merge
+    { "paths": ["db/migrations/**"], "label": "agent-migration-ok" },
   ],
-  "labelRules": [                                  // labels the engine adds from the diff
-    { "when": ["src/ui/**"], "unless": ["src/ui/**/*.test.ts"], "label": "review:ui" }
+  "labelRules": [
+    // labels the engine adds from the diff
+    { "when": ["src/ui/**"], "unless": ["src/ui/**/*.test.ts"], "label": "review:ui" },
   ],
   "requiredChecks": ["test", "build"],
   "forbiddenPaths": [".github/workflows/**", ".autoclaude/**", "CLAUDE.md", "AGENTS.md"],
   "policyAdjacentPaths": ["src/auth/**"],
-  "codeReview": { "angles": ["criteria", "bugs", "invariants", "history", "prior-prs",
-                             "comments", "performance", "tests", "security"],
-                  "scoreThreshold": 7 },
+  "codeReview": {
+    "angles": [
+      "criteria",
+      "bugs",
+      "invariants",
+      "history",
+      "prior-prs",
+      "comments",
+      "performance",
+      "tests",
+      "security",
+    ],
+    "scoreThreshold": 7,
+  },
   "planReview": { "scoreThreshold": 7 },
-  "caps": { "fixRounds": 2, "reviewRetries": 2, "planRounds": 2,
-            "wallClockMinutesPerStage": 60, "openPullRequests": 4, "staleClaimHours": 2 },
-  "labels": { "working": "agent-working", "blocked": "agent-blocked",
-              "needsShaping": "needs-shaping", "fixRound": "agent-fix-", "reviewRetry": "agent-retry-" }
+  "caps": {
+    "fixRounds": 2,
+    "reviewRetries": 2,
+    "planRounds": 2,
+    "wallClockMinutesPerStage": 60,
+    "openPullRequests": 4,
+    "staleClaimHours": 2,
+  },
+  "labels": {
+    "working": "agent-working",
+    "blocked": "agent-blocked",
+    "needsShaping": "needs-shaping",
+    "fixRound": "agent-fix-",
+    "reviewRetry": "agent-retry-",
+  },
 }
 ```
 
@@ -489,8 +538,8 @@ adds — is kept for both.
   continue. Running stages finish (C9).
 - **Hard limit inside a stage.** The adapter reports `limit` with the reset time; the stage
   is marked interrupted without bumping any counter and resumed after the reset.
-- **Unknown usage.** A reading that fails *transiently* holds new work until the next
-  successful reading. A runtime whose usage cannot be read *at all* falls back to the caps
+- **Unknown usage.** A reading that fails _transiently_ holds new work until the next
+  successful reading. A runtime whose usage cannot be read _at all_ falls back to the caps
   and the hard-limit pause, and says "budget not enforced: usage unreadable" in every
   `status` frame (C17).
 - **Visible.** `autoclaude usage` prints both windows per runtime against this project's
@@ -502,20 +551,20 @@ available as an option.
 
 ## 10. Behaviour that changes on purpose
 
-| Area | Source pipeline | autoclaude |
-|---|---|---|
-| Queue order | lowest issue number first | configured priority labels, then oldest |
-| Issue/PR listing | first 100 issues, newest 200 PRs | paginated, complete |
-| Triage | by hand | daily at `triageAt` for issues since enrolment or opted in (C15), plus re-triage of answered `needs-shaping` issues (C14) |
-| Queue curation | only what a human labelled `agent-ready` | triage applies `agent-ready` itself, no veto window (C13) |
-| Eligible authors | anyone | users with write access only (C12) |
-| Triage output | labels and comment written by the model | structured report; labels and comment written by the engine |
-| Merge | never | by policy into the integration branch, through a merge queue (§ 12) |
-| can-merge check 6 | reviewed head sha equals PR head | reviewed patch id equals the PR diff's patch id, after a conflict-free queue rebase (C16) |
-| Notification | none | one labelled comment with `@` mention; "Waiting for you" in `status` (C19) |
-| Budget | issue caps, learned ceiling, free-text limit notes | thresholds on read usage |
-| Effort | a prompt phrase ("Ultrathink …") | the runtime's effort flag |
-| Stage record | Agent task id + session id | pid + start time + orchestrator instance |
+| Area              | Source pipeline                                    | autoclaude                                                                                                                |
+| ----------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Queue order       | lowest issue number first                          | configured priority labels, then oldest                                                                                   |
+| Issue/PR listing  | first 100 issues, newest 200 PRs                   | paginated, complete                                                                                                       |
+| Triage            | by hand                                            | daily at `triageAt` for issues since enrolment or opted in (C15), plus re-triage of answered `needs-shaping` issues (C14) |
+| Queue curation    | only what a human labelled `agent-ready`           | triage applies `agent-ready` itself, no veto window (C13)                                                                 |
+| Eligible authors  | anyone                                             | users with write access only (C12)                                                                                        |
+| Triage output     | labels and comment written by the model            | structured report; labels and comment written by the engine                                                               |
+| Merge             | never                                              | by policy into the integration branch, through a merge queue (§ 12)                                                       |
+| can-merge check 6 | reviewed head sha equals PR head                   | reviewed patch id equals the PR diff's patch id, after a conflict-free queue rebase (C16)                                 |
+| Notification      | none                                               | one labelled comment with `@` mention; "Waiting for you" in `status` (C19)                                                |
+| Budget            | issue caps, learned ceiling, free-text limit notes | thresholds on read usage                                                                                                  |
+| Effort            | a prompt phrase ("Ultrathink …")                   | the runtime's effort flag                                                                                                 |
+| Stage record      | Agent task id + session id                         | pid + start time + orchestrator instance                                                                                  |
 
 Defects found in the source pipeline, fixed during the port with a test each:
 
@@ -598,16 +647,16 @@ a notification (§ 11). Every merge is one line in the events log and in `status
 
 ## 14. CLI surface
 
-| Verb | Purpose |
-|---|---|
-| `init`, `doctor` | set up a project; check everything |
-| `run`, `service install\|uninstall\|status` | the orchestrator in the foreground; autostart |
-| `status`, `watch`, `situation`, `usage` | what is happening and what waits for you; what the next tick sees; budget |
-| `pause`, `drain`, `resume` | control files, from any terminal |
-| `triage [--issue <n>]`, `issue <n>` | triage now; one issue attended, start to pull request |
-| `review --pr <n>` | the code review on an open pull request, posted as a comment |
-| `can-merge <pr>`, `rollback <issue> …`, `bench …` | merge verdict; ordered rollback; review benchmark |
-| `guard --runtime <r>` | internal: the hook entry point |
+| Verb                                              | Purpose                                                                   |
+| ------------------------------------------------- | ------------------------------------------------------------------------- |
+| `init`, `doctor`                                  | set up a project; check everything                                        |
+| `run`, `service install\|uninstall\|status`       | the orchestrator in the foreground; autostart                             |
+| `status`, `watch`, `situation`, `usage`           | what is happening and what waits for you; what the next tick sees; budget |
+| `pause`, `drain`, `resume`                        | control files, from any terminal                                          |
+| `triage [--issue <n>]`, `issue <n>`               | triage now; one issue attended, start to pull request                     |
+| `review --pr <n>`                                 | the code review on an open pull request, posted as a comment              |
+| `can-merge <pr>`, `rollback <issue> …`, `bench …` | merge verdict; ordered rollback; review benchmark                         |
+| `guard --runtime <r>`                             | internal: the hook entry point                                            |
 
 ## 15. Rollout
 
@@ -629,7 +678,7 @@ a notification (§ 11). Every merge is one line in the events log and in `status
 tests, compiled build, project contract, gate and test-runner adapters, deterministic
 orchestrator with the source pipeline's behaviour (no merge), engine-driven review fan-out,
 stage processes without forge credentials, autostart on all three OSes, CI matrix, the
-defects in § 10. *Exit:* the first consumer runs issues to pull requests through
+defects in § 10. _Exit:_ the first consumer runs issues to pull requests through
 autoclaude, unattended overnight; the suite is green on all three OSes.
 
 **Cut-over of the first consumer**, right after Phase 1, planned in that repository.
@@ -644,15 +693,15 @@ C19).
 
 ## 16. Risks
 
-| Risk | Mitigation |
-|---|---|
-| Claude usage not readable headless (S1) | C17: visible degradation; owner decides with the S1 result |
-| Codex fence weaker than Claude's | refuse the runtime/OS pair in `doctor`; C5 removes forge credentials regardless |
-| Code a model writes reaches the OS credential store through the gates | documented residual risk (§ 7.4); review, author trust and guard remain |
+| Risk                                                                            | Mitigation                                                                                                                               |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude usage not readable headless (S1)                                         | C17: visible degradation; owner decides with the S1 result                                                                               |
+| Codex fence weaker than Claude's                                                | refuse the runtime/OS pair in `doctor`; C5 removes forge credentials regardless                                                          |
+| Code a model writes reaches the OS credential store through the gates           | documented residual risk (§ 7.4); review, author trust and guard remain                                                                  |
 | Nine angle processes per review each pay start-up and the ~6.5k-token catalogue | same token cost as the source pipeline's subagents; now measured per stage, so cutting the catalogue per angle can be decided on numbers |
-| Auto-merge of `bug` by default merges a wrong fix | requires a proven red step and no open must; the integration branch is not production; a project can drop `bug` from the defaults |
-| Two orchestrators on one machine overshoot a threshold together | bounded by the sum of their concurrency × one stage; acceptable by D7 |
-| Vendor CLIs change flags (Codex changed its profile format in 0.134) | adapters pin a tested version range; `doctor` refuses an untested major |
+| Auto-merge of `bug` by default merges a wrong fix                               | requires a proven red step and no open must; the integration branch is not production; a project can drop `bug` from the defaults        |
+| Two orchestrators on one machine overshoot a threshold together                 | bounded by the sum of their concurrency × one stage; acceptable by D7                                                                    |
+| Vendor CLIs change flags (Codex changed its profile format in 0.134)            | adapters pin a tested version range; `doctor` refuses an untested major                                                                  |
 
 ## 17. Left to the builder
 
