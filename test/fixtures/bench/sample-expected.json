@@ -1,0 +1,90 @@
+[
+  {
+    "id": "boundary",
+    "file": "src/lib/pager.ts",
+    "lines": [
+      40,
+      50
+    ],
+    "tier": "must",
+    "note": "the last page index is wrong for an empty list"
+  },
+  {
+    "id": "inverted",
+    "file": "src/lib/pager.ts",
+    "lines": [
+      55,
+      60
+    ],
+    "tier": "should",
+    "note": "the cursor advances when there is no next page"
+  },
+  {
+    "id": "control",
+    "file": "tests\\lib\\pager.test.ts",
+    "lines": [
+      28,
+      34
+    ],
+    "family": "tests",
+    "tier": "should",
+    "note": "the negative assertion has no positive control"
+  },
+  {
+    "id": "cache",
+    "file": "src/lib/cache.ts",
+    "lines": [
+      10,
+      20
+    ],
+    "family": "perf",
+    "tier": "should",
+    "note": "the cache only grows"
+  },
+  {
+    "id": "teardown",
+    "file": "tests/lib/pager.test.ts",
+    "family": "tests",
+    "note": "the timer is never cleared"
+  },
+  {
+    "id": "pager-overlap",
+    "file": "src/lib/pager.ts",
+    "lines": [
+      38,
+      46
+    ],
+    "note": "a second window on the same evidence as boundary"
+  },
+  {
+    "id": "guardrail",
+    "file": "src/lib/guardrail.ts",
+    "lines": [
+      5,
+      9
+    ],
+    "tier": "should",
+    "note": "the clamp for a page size of zero"
+  },
+  {
+    "id": "metrics",
+    "file": "src/lib/metrics.ts",
+    "lines": [
+      20,
+      30
+    ],
+    "family": "perf",
+    "tier": "should",
+    "note": "the sorted scan on a long list"
+  },
+  {
+    "id": "router",
+    "file": "src/lib/router.ts",
+    "lines": [
+      3,
+      8
+    ],
+    "tier": "must",
+    "note": "the route that ignores the page parameter"
+  }
+]

@@ -1,0 +1,63 @@
+[
+  {
+    "id": "must-null-guard",
+    "file": "src/store/records.ts",
+    "lines": [20, 30],
+    "family": "bug",
+    "tier": "must",
+    "note": "a lookup result is used before it is checked"
+  },
+  {
+    "id": "must-unscoped-read",
+    "file": "src/store/records.ts",
+    "lines": [24, 40],
+    "family": "security",
+    "tier": "must",
+    "note": "a read that never checks the caller"
+  },
+  {
+    "id": "should-handler-untested",
+    "file": "src/store/handlers.ts",
+    "lines": [10, 18],
+    "tier": "should",
+    "note": "the rewritten handler has no test"
+  },
+  {
+    "id": "should-leak",
+    "file": "src/store/connection.ts",
+    "lines": [44, 52],
+    "family": "bug",
+    "tier": "should",
+    "note": "the handle is released on the happy path only"
+  },
+  {
+    "id": "should-growth",
+    "file": "src/store/cache.ts",
+    "family": "perf",
+    "tier": "should",
+    "note": "entries are added and never removed"
+  },
+  {
+    "id": "later-docs",
+    "file": "docs/store.md",
+    "family": "docs",
+    "tier": "later",
+    "note": "the document still describes the old lookup"
+  },
+  {
+    "id": "later-follow-up",
+    "file": "src/store/records.ts",
+    "lines": [60, 64],
+    "family": "scope",
+    "tier": "later",
+    "note": "a placeholder left for another issue"
+  },
+  {
+    "id": "later-inefficiency",
+    "file": "src/store/cache.ts",
+    "lines": [30, 36],
+    "family": "perf",
+    "tier": "later",
+    "note": "a value recomputed on every pass"
+  }
+]
