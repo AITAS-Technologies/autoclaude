@@ -1,0 +1,42 @@
+[
+  {
+    "conclusion": "SKIPPED",
+    "context": null,
+    "name": "optional-review",
+    "state": null,
+    "status": "COMPLETED",
+    "workflowName": "Review"
+  },
+  {
+    "conclusion": "SUCCESS",
+    "context": null,
+    "name": "test",
+    "state": null,
+    "status": "COMPLETED",
+    "workflowName": "PR Gates"
+  },
+  {
+    "conclusion": "SUCCESS",
+    "context": null,
+    "name": "lint",
+    "state": null,
+    "status": "COMPLETED",
+    "workflowName": "PR Gates"
+  },
+  {
+    "conclusion": "SUCCESS",
+    "context": null,
+    "name": "build",
+    "state": null,
+    "status": "COMPLETED",
+    "workflowName": "PR Gates"
+  },
+  {
+    "conclusion": null,
+    "context": "deploy-preview",
+    "name": null,
+    "state": "SUCCESS",
+    "status": null,
+    "workflowName": null
+  }
+]
