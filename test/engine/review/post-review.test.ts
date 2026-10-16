@@ -626,6 +626,20 @@ describe("the mention that would trigger a workflow is defused", () => {
 
 // The footer is the config's (design section 8.2, `messages.footer`), not a product line
 // the module hardcodes. The default is only for a caller that names no messages at all.
+describe("CI skip markers in the comment", () => {
+  it("are defused in a finding's evidence and message, not deleted", () => {
+    const f0 = {
+      ...report.findings[0]!,
+      evidence: "run: git commit -m 'x [skip actions]'",
+      message: "has [ci skip] in it",
+    };
+    const body = renderReviewComment({ ...report, findings: [f0] }, "abc1234");
+    expect(body).not.toMatch(/\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i);
+    expect(body).toContain("[\u200bskip actions]");
+    expect(body).toContain("[\u200bci skip] in it");
+  });
+});
+
 describe("the footer", () => {
   it("is the configured one, last in the comment", () => {
     const body = renderReviewComment(

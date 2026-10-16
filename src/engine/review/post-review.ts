@@ -23,7 +23,7 @@
  * prefix, so any status parses and only `complete` says the review finished. The skill
  * used to have such a reviewer omit the line altogether, which made `extractBlock` throw
  * and turned every stopped review into exit 2, "the report did not parse" — the one
- * outcome that leaves a human with nothing (`/code-review` on the review-tiers branch).
+ * outcome that leaves a human with nothing.
  *
  * Why an engine step and not `gh pr comment` typed by the reviewer: the same reason publish.ts
  * exists. The code review produces findings and writes no GitHub state — "findings
@@ -316,13 +316,17 @@ function classifyFor(
         problem: null,
       };
     } catch (error) {
-      return { classify: fallbackClassify(root), problem: foldNote(String(error)) };
+      return {
+        classify: fallbackClassify(root, config.cfg.worktrees?.root),
+        problem: foldNote(String(error)),
+      };
     }
   }
   return { classify: fallbackClassify(root), problem: config.problem };
 }
 
-const fallbackClassify = (root: string): ClassifyOptions => ({
+const fallbackClassify = (root: string, worktreesRoot?: string): ClassifyOptions => ({
+  worktreesRoot,
   catalogue: catalogueFor(root),
   threshold: DEFAULT_THRESHOLD,
 });

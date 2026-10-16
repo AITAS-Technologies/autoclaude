@@ -227,6 +227,23 @@ describe("the class of a finding comes from the catalogue and the confidence", (
     }
   });
 
+  // `cfg.worktrees.root` reaches the fingerprint through `ClassifyOptions` (design section
+  // 8.2): a quote under a custom worktrees directory is the same finding as the
+  // repository-relative one, and only when the parser is told the root.
+  it("fingerprints a quote under a custom worktrees root like the relative one", () => {
+    const text = fx("code-review");
+    const under = text
+      .split("file: src/lib/format.ts")
+      .join("file: build/trees/agent+7-x/src/lib/format.ts");
+    const plain = parseCodeReviewReport(text, { catalogue });
+    const told = parseCodeReviewReport(under, { catalogue, worktreesRoot: "build/trees" });
+    const blind = parseCodeReviewReport(under, { catalogue });
+    const prints = (r: typeof plain) =>
+      r.findings.filter((f) => f.file !== "").map((f) => f.fingerprint);
+    expect(prints(told)).toEqual(prints(plain));
+    expect(prints(blind)).not.toEqual(prints(plain));
+  });
+
   it("refuses a confidence that is not a whole number from 1 to 10, naming the finding", () => {
     for (const bad of ["0", "11", "8.5", "high", ""]) {
       const text = fx("code-review").replace("confidence: 9", `confidence: ${bad}`);

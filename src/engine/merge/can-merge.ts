@@ -209,7 +209,7 @@ export interface ReviewFactsOptions {
  * unstamped, so an archive describing a tree that was never pushed sits on top of the
  * stamped one that matches the pull request's head — and check 3 then reported findings
  * against a revision the pull request does not show, while check 6 only said "no head
- * stamp" (`/code-review` on the review-tiers branch).
+ * stamp".
  *
  * A report that does not parse, and one that never reached its verdict, are not that
  * case: the archive is there and it does not say what the review found, which is a failed
@@ -331,7 +331,7 @@ export function reviewFactsFor(
  * applied neither the evidence check nor the catalogue the decision was made against: a
  * must that `decide` withdrew over a quote that did not verify was still a must here, so
  * `publish.ts` correctly opened the pull request and this reported it unmergeable for
- * ever (`/code-review` on the review-tiers branch). The re-parse still names the rules
+ * ever. The re-parse still names the rules
  * behind a stamped must, because a number is not something a human can act on. An archive
  * from before the stamp existed is classified as it always was.
  */

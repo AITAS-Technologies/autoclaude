@@ -225,8 +225,8 @@ function exemptFromEvidence(f: ReviewFinding, redStep: RedStepVerdict | null): b
  * diff never had — and being a file away from every worktree, it is the common case
  * rather than a corner.
  */
-function resolveQuotedFile(worktree: string, file: string): string | null {
-  const written = normaliseQuotedPath(file);
+function resolveQuotedFile(worktree: string, file: string, worktreesRoot?: string): string | null {
+  const written = normaliseQuotedPath(file, worktreesRoot);
   const path = isAbsolute(written) ? written : join(worktree, written);
   const inside = relative(worktree, path);
   return inside.startsWith("..") || isAbsolute(inside) ? null : path;
@@ -279,6 +279,7 @@ function establish(
   findings: ReviewFinding[],
   opts: DecideOptions,
   redStep: RedStepVerdict | null,
+  worktreesRoot?: string,
 ): { kept: DecidedFinding[]; demoted: DecidedFinding[]; unchecked: string | null } {
   // Trimmed once and used everywhere below: `existsSync` on a real directory whose path
   // carries a trailing space is false, so an entry written by hand or by another tool
@@ -316,7 +317,7 @@ function establish(
       withdraw(decided, "no quotable line, and its rule is one whose evidence is a quoted line");
       continue;
     }
-    const path = resolveQuotedFile(tree, f.file);
+    const path = resolveQuotedFile(tree, f.file, worktreesRoot);
     if (path === null) {
       withdraw(
         decided,
@@ -464,6 +465,7 @@ export function decide(
     report.findings,
     opts,
     codeReport?.redStep ?? null,
+    cfg.worktrees?.root,
   );
   const byTier = findingsByTier(kept);
   const spent = isCode ? attempts.fix : attempts.plan;

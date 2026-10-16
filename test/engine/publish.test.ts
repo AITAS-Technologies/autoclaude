@@ -188,6 +188,18 @@ describe("prBody", () => {
     expect(b).toContain("@claude, still right?");
   });
 
+  // The body becomes the squash commit body, where GitHub reads skip markers, so a quoted
+  // line carrying one is defused (a zero-width space after the bracket), not deleted.
+  it("defuses CI skip markers in model-written text and keeps the quote readable", () => {
+    const quoting = {
+      ...review,
+      uncertain: ["docs/completeness — the commit says [skip ci] and [CI Skip] and [no ci]"],
+    };
+    const b = prBody(42, impl, quoting, planReview, null, "host/ada", "abc1234", atCap);
+    expect(b).not.toMatch(/\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i);
+    expect(b).toContain("[\u200bskip ci] and [\u200bCI Skip] and [\u200bno ci]");
+  });
+
   it("ends with the configured footer, and with the default when none is given", () => {
     expect(
       body({ messages: { footer: "Posted by hand", defuseMentions: true } }).trimEnd(),

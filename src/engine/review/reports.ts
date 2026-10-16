@@ -113,6 +113,8 @@ export interface ClassifyOptions {
   catalogue: InvariantRule[];
   /** `config.<stage>.scoreThreshold`; `rules.ts`'s `DEFAULT_THRESHOLD` when none. */
   threshold?: number;
+  /** `cfg.worktrees.root`: what a quoted path is normalised against; the default root when absent. */
+  worktreesRoot?: string;
 }
 
 export interface ReviewFinding {
@@ -588,6 +590,7 @@ function classify(
   rows: Map<string, InvariantRule>,
   threshold: number,
   at: number,
+  worktreesRoot?: string,
 ): Classified {
   const where = stated.file ? ` (${stated.file}:${stated.line})` : "";
   // By id, from the map the caller built once: this was a `find` per finding over the
@@ -623,7 +626,7 @@ function classify(
       // The row's own kind. `parseInvariants` refuses any word outside the two, so there
       // is nothing to validate here — unlike the level, which is whatever the row says.
       evidenceKind: row.evidence,
-      fingerprint: fingerprintOf(stated.rule, stated.evidence, stated.file),
+      fingerprint: fingerprintOf(stated.rule, stated.evidence, stated.file, worktreesRoot),
     },
   };
 }
@@ -644,7 +647,7 @@ function classifiedReport(
   const findings: ReviewFinding[] = [];
   const withdrawn: string[] = [];
   report.stated.forEach((stated, i) => {
-    const c = classify(stated, rows, threshold, i + 1);
+    const c = classify(stated, rows, threshold, i + 1, opts.worktreesRoot);
     if (c.kind === "finding") findings.push(c.finding);
     else withdrawn.push(c.note);
   });
@@ -1031,5 +1034,6 @@ export function classifyOptions(
     catalogue: over.catalogue ?? catalogueFor(root),
     threshold:
       stage === "code-review" ? cfg.codeReview?.scoreThreshold : cfg.planReview?.scoreThreshold,
+    worktreesRoot: cfg.worktrees?.root,
   };
 }
