@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest tests" tests="4" failures="2" errors="0" time="0.931">
+  <testsuite name="cart totals" errors="0" failures="1" skipped="0" timestamp="2026-01-05T10:00:00" time="0.512" tests="2">
+    <testcase classname="cart totals sums items" name="cart totals sums items" time="0.003">
+    </testcase>
+    <testcase classname="cart totals applies a discount" name="cart totals applies a discount" time="0.004">
+      <failure>Error: expect(received).toBe(expected)
+
+Expected: 90
+Received: 100
+    at Object.&lt;anonymous&gt; (src/cart.test.js:12:20)</failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="cart rounding" errors="0" failures="1" skipped="0" timestamp="2026-01-05T10:00:01" time="0.201" tests="2">
+    <testcase classname="cart rounding rounds up" name="cart rounding rounds up" time="0.002">
+    </testcase>
+    <testcase classname="cart rounding rounds down" name="cart rounding rounds down" time="0.002">
+      <failure><![CDATA[Error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 2]]></failure>
+    </testcase>
+  </testsuite>
+</testsuites>
