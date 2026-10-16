@@ -8,7 +8,7 @@ import {
   releaseBody,
   releaseIssue,
   releaseLabels,
-} from "../../src/engine/claim.js";
+} from "../../src/engine/claims.js";
 import type { ProjectConfig } from "../../src/config/types.js";
 import { Forge, type Exec, type IssueView } from "../../src/forge/github.js";
 
@@ -272,6 +272,8 @@ describe("claimIssue and releaseIssue", () => {
    * would start a run from inside the release that ends the attempt. The mention is
    * defused except for the configured humans, who are meant to be notified.
    */
+  // Changed from the source test on purpose (port notes: claim.ts @claude scrubbing -> project
+  // option; C2 ruling): `defuseMentions(text, cfg.humans)` replaces the fixed `@claude` scrub.
   it("defuses the mention in a release reason before it reaches the comment, except a configured human's", () => {
     const gh = github({ labels: ["agent-ready", "agent-working"] });
     releaseIssue(

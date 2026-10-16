@@ -20,7 +20,6 @@ import { branchPrefixFor, worktreeDirPrefix } from "./branch-names.js";
 // `review/rules.ts` imports a leaf module and nothing else, so this closes no loop, which
 // matters because `rules.ts` calls `escapeRegExp` at module scope.
 import { escapeRegExp } from "./review/rules.js";
-import { repoRoot } from "./root.js";
 
 const MAX_SLUG = 40;
 
@@ -103,17 +102,16 @@ export interface CreatedWorktree {
  *   `<remote>/<branch>` exists, the worktree is created on that remote branch rather than
  *   on the integration branch, so the already pushed commits are in it and the publish
  *   lease check against the remote head still holds
- * @param opts.root the project root; defaults to the main working directory of the
- *   repository the process runs in
+ * @param opts.root the project root (explicit: nothing here depends on the working directory)
  */
 export function createWorktree(
   issue: number,
   title: string,
-  opts: { replace: boolean; pushedSha?: string; root?: string },
+  opts: { replace: boolean; pushedSha?: string; root: string },
   cfg: ProjectConfig,
   exec: Exec = realExec,
 ): CreatedWorktree {
-  const root = opts.root ?? repoRoot(process.cwd());
+  const root = opts.root;
   const remote = cfg.forge.remote;
   const existing = findWorktree(root, issue, cfg, exec);
   if (existing) {

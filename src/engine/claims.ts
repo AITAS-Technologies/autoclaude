@@ -4,7 +4,7 @@
  * and the comments are re-read; the earliest active claim wins, and a loser moves on
  * without touching anything.
  *
- * Verbs (`cli`; the `autoclaude` binary registers them in a later task):
+ * Verbs (`cli`; wired onto the `autoclaude` binary by the CLI):
  *   claim <issue> [--takeover]        # exit 0 won, 1 lost or not claimable
  *   release <issue> --to <blocked|needs-shaping|ready|done|none> --reason "<text>"
  *

@@ -54,6 +54,9 @@ describe("slugify", () => {
   });
 });
 
+// Changed from the source test on purpose: the worktree directory now sits under the
+// configured `worktrees.root` (design § 8.2, port notes: worktree root from config) and
+// the result is absolute.
 describe("namesFor", () => {
   it("puts the issue number first so the mapping survives without the ledger", () => {
     const names = namesFor(126, "Umlauts in file names", cfg, "/proj");
@@ -173,6 +176,7 @@ describe("create and remove, against a real temporary repository", () => {
     removeWorktree(root, 4, cfg, { deleteRemote: false });
   }, 60_000);
 
+  // New: a root with a space and a non-ASCII character (design § 13, plan Review Focus 1).
   it("creates a worktree under a root with a space and umlaut", () => {
     const { root } = repo("autoclaude-wt-umlaut-");
     const made = make(root, 5, "Space and umlaut", { cfg: withRoot("wt Müller", []) });
@@ -195,7 +199,7 @@ describe("create and remove, against a real temporary repository", () => {
     removeWorktree(root, 7, cfg, { deleteRemote: false });
   }, 60_000);
 
-  // Defect 1: a recreated worktree used to be cut from the integration branch, so the
+  // Defect 1 (design § 10, defect 1): a recreated worktree used to be cut from the integration branch, so the
   // already pushed commits were missing and the publish lease check failed afterwards.
   it("recreates a pushed issue's worktree on its remote branch", () => {
     const { root } = repo("autoclaude-wt-pushed-");
@@ -490,6 +494,8 @@ describe("removeWorktree, against what git prints", () => {
  * so this module must not import the ledger back, and must not carry a second copy of
  * those helpers.
  */
+// Changed from the source test on purpose: the branch-name helpers moved to
+// `branch-names.ts` and the CLI parsers to `cli/args.ts` (port map, worktree.ts row).
 describe("worktree.ts's imports", () => {
   const source = readFileSync("src/engine/worktree.ts", "utf8");
 
