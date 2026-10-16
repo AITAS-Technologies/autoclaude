@@ -362,8 +362,7 @@ function parseBlock(lines: string[]): Block {
  * The backtick is in the list because the catalogue prints every rule id inside one, so
  * that is how a reviewer copying an id out of it writes the id down. Read raw, such an id
  * matched no catalogue row, the finding went to `uncertain` as "not in the catalogue", and
- * a `must` disappeared with nothing in the report saying why (`/code-review` on the
- * review-tiers branch).
+ * a `must` disappeared with nothing in the report saying why.
  *
  * A single character is left alone: a lone `"` is not a pair, and slicing it away would
  * turn a malformed value into an empty one that reads like a quote nobody wrote.
@@ -496,8 +495,7 @@ function isLevel(v: string): v is Level {
  * The first run of digits, so a reviewer who wrote `~42`, `L42` or `line 42` is read as
  * meaning 42. `parseInt` returned NaN for all three and the 0 it defaulted to was
  * indistinguishable from the intentional `-`, so the evidence check withdrew a finding
- * with a real file and a verbatim quote over the way its line was written
- * (`/code-review` on the review-tiers branch).
+ * with a real file and a verbatim quote over the way its line was written.
  */
 function lineOf(written: string | undefined): number {
   return Number(/^\D*(\d+)/.exec(written ?? "")?.[1] ?? 0);
@@ -718,7 +716,7 @@ export function parseCodeReviewReport(text: string, opts: ClassifyOptions): Code
     // purpose, so the finding is gone from `findings` and this check sees no must in the
     // family. Where such an id is sitting in `uncertain`, the message names it, because
     // "needs a must in the tests/ family" sent a reader looking for a missing finding
-    // that was written and misspelt (`/code-review` on the review-tiers branch).
+    // that was written and misspelt.
     const typos = report.uncertain.filter(
       (line) => /^tests\//.test(line.trim()) && line.includes("not in the catalogue"),
     );

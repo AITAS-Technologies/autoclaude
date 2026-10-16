@@ -6,7 +6,7 @@
  * `publish.test.ts`, and `can-merge.test.ts` built the same `CodeReviewReport` shape under
  * a name of its own — so a field added to either shape had to be added in three places or
  * the suites tested three different reports. It is the same reason `findings.ts` beside
- * this file exists (`/code-review` on the review-tiers branch).
+ * this file exists.
  *
  * Not a `*.test.ts` name, so vitest does not collect it: its include globs take only files
  * ending in `.test.ts` or `.test.tsx`, and this file holds no cases.

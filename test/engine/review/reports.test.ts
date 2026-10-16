@@ -219,7 +219,7 @@ describe("the class of a finding comes from the catalogue and the confidence", (
   // The same fingerprint helper the decision script compares rounds with, not a second
   // implementation of it: a `later` item deferred in round 1 is recognised by this string.
   // The file is part of it, because the same quote under the same rule recurs across files
-  // and used to read as one finding (`/code-review` on the review-tiers branch).
+  // and used to read as one finding.
   it("fingerprints every finding by its rule, its file and its quoted line", () => {
     for (const f of codeReview(fx("code-review")).findings) {
       expect(f.fingerprint).toBe(fingerprintOf(f.rule, f.evidence, f.file));

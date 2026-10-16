@@ -416,7 +416,6 @@ describe("the evidence check: the quote is checked, not believed", () => {
    * change was withdrawn every time it fired and an open must became a publish — and
    * every project shipping a measurement rule would have had to edit the engine, against
    * the rule that the engine learns a project fact from `.autoclaude/` and nowhere else.
-   *.
    *
    * Parsed rather than built, because the claim is that the parser reads the kind off the
    * row and the decision honours it.

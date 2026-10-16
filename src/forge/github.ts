@@ -64,7 +64,7 @@ export interface IssueComment {
   createdAt: string;
 }
 
-/** What `issue list` returns: no body, and comments only when asked for (review of #145, L8, L11). */
+/** What `issue list` returns: no body, and comments only when asked for. */
 export interface IssueSummary {
   number: number;
   title: string;
@@ -122,7 +122,7 @@ export interface PrSummary {
   /**
    * When the pull request ended, null while it is open. `updatedAt` moves on every
    * comment, so a human commenting on an earlier attempt's closed pull request made it
-   * look like this attempt's (review of #147, round 2); these two do not move. Optional
+   * look like this attempt's; these two do not move. Optional
    * in the type only so a fixture may leave them out; `gh` always returns both, and a
    * reader that finds them missing falls back to `updatedAt`.
    */
@@ -196,7 +196,7 @@ export class Forge {
   /**
    * Add and remove in one `gh issue edit`, so a release cannot lose one label without
    * gaining the other. The separate add and remove wrappers were the non-atomic pair this
-   * replaced, and are gone (re-review of #145, N14).
+   * replaced, and are gone.
    */
   editLabels(n: number, change: { add?: string[]; remove?: string[] }): void {
     const args = ["issue", "edit", String(n)];

@@ -221,8 +221,6 @@ describe("loadExpected", () => {
 });
 
 /**
-
-/**
  * The shape of a realistic benchmark list, pinned on a generic eight-finding file of our
  * own: the real list belongs to the product it was written for and is not part of this
  * repository (design section 10, the recall benchmark). The thing pinned is the ordering

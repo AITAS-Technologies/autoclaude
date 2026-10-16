@@ -562,8 +562,7 @@ export function decide(
   // Rule 2: the red step could not run, and that is worth a re-dispatch while the retry
   // cap has one left. The counter is shared with runs that ended without a report and is
   // not reset per fix round, so a review whose predecessor crashed may already have spent
-  // it — which is why the cap, and not the note's literal `=== 0`, is the condition
-  //.
+  // it — which is why the cap, and not the note's literal `=== 0`, is the condition.
   if (codeReport?.redStep === "could-not-run" && attempts.reviewRetry < cfg.caps.reviewRetries) {
     return assemble("retry", {
       blocking: [],
@@ -591,8 +590,9 @@ export function decide(
 export interface DecisionDeps {
   /**
    * The main working directory: the one place on this machine that holds the ledger and
-   * the run archive. Defaults to `repoRoot(process.cwd())`, deliberately not `process.cwd()`, which in
-   * an orchestrated run is a worktree of its own.
+   * the run archive. Defaults to `repoRoot(process.cwd())`, which resolves the checkout that holds the git
+   * common directory from the current directory, so a run inside a worktree still finds
+   * the main one.
    */
   root?: string;
   stage?: ReviewStage;

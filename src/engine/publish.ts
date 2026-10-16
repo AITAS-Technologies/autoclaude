@@ -153,7 +153,7 @@ export function approvalsNeeded(
 
 /**
  * Nothing the engine writes to GitHub carries a CI skip marker (plan Global Constraints):
- * the pull request's CI would never start, and a required check that never reads as a
+ * the pull request's CI would never start, and a required check that never reports reads as a
  * refusal at the merge verdict. The title is the engine's own text, so the markers are
  * stripped from it. A body or a comment quotes model-written text, which is defused
  * instead (`presentText`: a zero-width space after the opening bracket), so a quoted line
@@ -741,8 +741,8 @@ export function publish(issue: number, update: boolean, deps: PublishDeps): Publ
     //
     // Gated on the flag and not merely on "a pull request exists", which is what this
     // was: `publish.ts <issue>` typed by hand on an issue that already had one rewrote
-    // its body against this file's own header. The orchestrator passes `--update` exactly when the ledger has a number,
-    // so nothing about an orchestrated run changes.
+    // its body against this file's own header. The orchestrator passes `--update` exactly
+    // when the ledger has a number, so nothing about an orchestrated run changes.
     forge.editPrBody(pr, body);
   }
 

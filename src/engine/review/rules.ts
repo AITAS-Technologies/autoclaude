@@ -285,9 +285,9 @@ export function normaliseEvidence(evidence: string): string {
  *
  * The file is part of it because a quote recurs: a route-handler signature or any other
  * boilerplate line, cited by the same rule in another file on a later round, was read as
- * the same finding and reached the pull request marked "noted in an earlier round"
- * (`/code-review` on the review-tiers branch). It goes through `normaliseQuotedPath`, the
- * same normalisation the evidence check resolves a quote with: separators alone left a
+ * the same finding and reached the pull request marked "noted in an earlier round".
+ * The file goes through `normaliseQuotedPath`, the same normalisation the evidence check
+ * resolves a quote with: separators alone left a
  * finding quoted at the worktree's absolute path with a different identity from the same
  * finding quoted repository-relative, which is the shape two rounds really produce. A
  * caller with no file — the rules whose findings are about what a file does not contain —
