@@ -102,7 +102,13 @@ export function spawnSupervised(
   opts: RunOptions & { stdoutFile: string; stderrFile: string },
 ): { pid: number; startedAt: string; done: Promise<RunResult>; kill(): Promise<void> } {
   const outFd = openSync(opts.stdoutFile, "w");
-  const errFd = openSync(opts.stderrFile, "w");
+  let errFd: number;
+  try {
+    errFd = openSync(opts.stderrFile, "w");
+  } catch (e) {
+    closeSync(outFd);
+    throw e;
+  }
   let child;
   try {
     child = crossSpawn(cmd, args, {
@@ -117,6 +123,8 @@ export function spawnSupervised(
     closeSync(errFd);
   }
   if (child.pid === undefined) {
+    // The spawn error is emitted on the next tick; swallow it so it is not uncaught.
+    child.on("error", () => {});
     throw new Error(`Failed to start ${cmd}`);
   }
   const pid = child.pid;

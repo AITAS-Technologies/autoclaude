@@ -90,6 +90,20 @@ describe("spawn", () => {
     expect(readFileSync(stderrFile, "utf8")).toBe("e");
   });
 
+  it("spawnSupervised on a missing command fails cleanly (throw or failed result, never uncaught)", async () => {
+    const dir = tmp("sup-");
+    try {
+      const h = spawnSupervised("definitely-not-a-command-xyz", [], {
+        stdoutFile: join(dir, "o"),
+        stderrFile: join(dir, "e"),
+      });
+      expect((await h.done).status).not.toBe(0);
+    } catch (e) {
+      expect(String(e)).toMatch(/Failed to start/);
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  });
+
   it("spawnSupervised kill() removes the process tree", async () => {
     const dir = tmp("sup-");
     const h = spawnSupervised(process.execPath, [SLEEPER], {

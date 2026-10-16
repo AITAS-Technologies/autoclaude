@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { killTree, processStartTime } from "../../src/platform/kill.js";
+import { killTree, parsePsStartLine, processStartTime } from "../../src/platform/kill.js";
 import { spawnSupervised } from "../../src/platform/spawn.js";
 
 describe("processStartTime", () => {
@@ -35,5 +35,31 @@ describe("killTree", () => {
 
   it("does not throw for a process that does not exist", async () => {
     await expect(killTree(2 ** 22 + 12345)).resolves.toBeUndefined();
+  });
+});
+
+describe("killTree pid guard", () => {
+  it("ignores pid 0, 1 and garbage without signalling anything", async () => {
+    const orig = process.kill;
+    const calls: unknown[] = [];
+    process.kill = ((...a: unknown[]) => {
+      calls.push(a);
+      return true;
+    }) as typeof process.kill;
+    try {
+      for (const pid of [0, 1, -5, 1.5, NaN]) await killTree(pid);
+    } finally {
+      process.kill = orig;
+    }
+    expect(calls).toEqual([]);
+    expect(processStartTime(process.pid)).not.toBeNull();
+  });
+});
+
+describe("parsePsStartLine", () => {
+  it("parses a live process and treats zombies and empty output as dead", () => {
+    expect(parsePsStartLine("Ss   Mon Oct 16 12:34:56 2026\n")).toMatch(/^2026-10-1[56]T/);
+    expect(parsePsStartLine("Z+   Mon Oct 16 12:34:56 2026")).toBeNull();
+    expect(parsePsStartLine("")).toBeNull();
   });
 });
