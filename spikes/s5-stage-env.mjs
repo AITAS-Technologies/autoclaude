@@ -2,10 +2,12 @@
 // Throwaway script, kept for the record. Plain Node ESM, no dependencies.
 //
 // Usage: S5_PRIVATE_REPO=<https url of a private repo> node spikes/s5-stage-env.mjs <out-dir> [env ...]
-//   env names: base stage closed   (default: all three)
+//   env names: base stage credonly closed closedfile   (default: all)
 //     base   = this process's environment (the positive control: a working gh login and git credentials)
 //     stage  = base minus the forge variables, plus the recipe variables from the task
+//     credonly = stage plus only GIT_CONFIG_PARAMETERS='credential.helper=' (isolates what the empty helper closes)
 //     closed = stage plus the extra closers found by this spike (see CLOSERS below)
+//     closedfile = closed plus protocol.file.allow=always (restores local file transports)
 //   S5_PRIVATE_REPO_SSH (optional) overrides the ssh form derived from S5_PRIVATE_REPO.
 //
 // The private repository is read from the environment and redacted from every recorded output
@@ -24,7 +26,7 @@ const PUBLIC_REPO = "https://github.com/AITAS-Technologies/autoclaude.git";
 
 const argv = process.argv.slice(2);
 const outDir = resolve(argv[0] ?? "s5-out");
-const wanted = argv.slice(1).length ? argv.slice(1) : ["base", "stage", "closed"];
+const wanted = argv.slice(1).length ? argv.slice(1) : ["base", "stage", "credonly", "closed", "closedfile"];
 mkdirSync(outDir, { recursive: true });
 
 const PRIVATE = process.env.S5_PRIVATE_REPO;
@@ -86,7 +88,13 @@ const CLOSERS = {
 function closedEnv() {
   return { ...stageEnv(), ...CLOSERS };
 }
-const ENVS = { base: baseEnv, stage: stageEnv, closed: closedEnv };
+const ENVS = {
+  base: baseEnv,
+  stage: stageEnv,
+  credonly: () => ({ ...stageEnv(), GIT_CONFIG_PARAMETERS: "'credential.helper='" }),
+  closed: closedEnv,
+  closedfile: () => ({ ...stageEnv(), GIT_CONFIG_PARAMETERS: "'credential.helper=' 'protocol.allow=never' 'protocol.file.allow=always'" }),
+};
 
 // ---- locating binaries -------------------------------------------------------
 function resolveClaude() {
@@ -155,6 +163,21 @@ try {
     }
     for (const [label, cmd, args, cwd] of probes()) {
       results.push(record(envName, label, sh(cwd, cmd, args, env)));
+    }
+    // Local transports (no network): clone of a path, clone of file://, fetch and push against a local bare remote.
+    {
+      const n = wtCount++;
+      const bare = join(root, `bare-${n}.git`);
+      const wc = join(root, `wc-${n}`);
+      sh(root, "git", ["clone", "-q", "--bare", clone, bare]);
+      sh(root, "git", ["clone", "-q", bare, wc]);
+      const fileUrl = "file://" + (bare.startsWith("/") ? bare : "/" + bare.replaceAll("\\", "/"));
+      for (const [label, args] of [
+        ["git clone <local path>", ["clone", "-q", clone, join(root, `c1-${n}`)]],
+        ["git clone file://<bare>", ["clone", "-q", fileUrl, join(root, `c2-${n}`)]],
+        ["git fetch (local bare remote)", ["-C", wc, "fetch"]],
+        ["git push (local bare remote)", ["-C", wc, "push", "origin", "HEAD:refs/heads/spike-s5"]],
+      ]) results.push(record(envName, label, sh(root, "git", args, env)));
     }
     // git commit in a worktree: must succeed everywhere.
     {
