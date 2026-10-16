@@ -11,6 +11,8 @@ const cfg = {
   caps: { concurrency: { day: 1, night: 2 } },
 } as unknown as ProjectConfig;
 
+// Changed from the source by a listed change (design § 13, explicit time zone): the day
+// window is read in `schedule.timezone`, so the instants are UTC and the zone is "UTC".
 const at = (h: number, m: number) => new Date(Date.UTC(2026, 8, 8, h, m));
 
 describe("profileAt", () => {

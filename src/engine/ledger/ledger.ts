@@ -230,8 +230,8 @@ function dropTmp(tmp: string): void {
 
 /**
  * Atomic: write a sibling named after this process, then rename. A crash mid-write
- * leaves the old file, not half a new one, and two processes never share a temp name
- *. Callers that read, change and write hold the lock below.
+ * leaves the old file, not half a new one, and two processes never share a temp name.
+ * Callers that read, change and write hold the ledger lock (`withLedgerLock` in lock.ts).
  *
  * The rename is retried, like `status.md`'s, and unlike it still throws when it never
  * succeeds: the ledger write is this function's whole job, while `status.md` is derived.
@@ -623,7 +623,7 @@ export function reconcile(
     }
     if (seen.has(key)) continue;
     // A live stage means a stage process is still editing that worktree. Dropping the entry
-    // would lose the task id, and the next tick would rebuild it from the worktree and
+    // would lose the stage record, and the next tick would rebuild it from the worktree and
     // dispatch a second stage into the same directory. The label being gone is a fact
     // to report, not a reason to forget the running work.
     if (entry.stage && entry.stage.instance === out.instance) {
@@ -748,9 +748,9 @@ export function renderStatus(
 /**
  * The layer below a transition (design, "A visible run").
  *
- * A transition says an issue is now `implementing`; it does not say which subagent is
+ * A transition says an issue is now `implementing`; it does not say which stage process is
  * working, on what, since when, or what it last reported — and a human following a run
- * saw "Waiting for 1 background agent" and nothing else. So every issue keeps an
+ * saw only that something was running and nothing else. So every issue keeps an
  * append-only `runs/<issue>/events.log` that the stages and the engine write to, and
  * `status.md` shows its tail for every live stage.
  *
@@ -983,16 +983,14 @@ const RENAME_DELAY_MS = 20;
  * that is not under the ledger lock — an editor, the watcher, a virus scanner — which on
  * Windows makes the rename one of `RETRY_CODES`. The loop is shared so the two cannot
  * disagree about how long to try; what they do afterwards differs and stays with each
- * caller, because `ledger.json` is the record and `status.md` is derived from it
- *.
+ * caller, because `ledger.json` is the record and `status.md` is derived from it.
  *
  * What counts as a lost race is `RETRY_CODES`, and on Windows that includes EACCES: a
  * reader or a scanner holding the target open answers EPERM or EACCES depending on which
  * handle wins, so both are retried, six times, twenty milliseconds apart. A code outside
  * the set is thrown at once — ENOSPC or EROFS is a full or read-only disk, a broken machine
  * rather than a race, and retrying it only delays the report. The docstring named EACCES on
- * the wrong side of that line, which sent a reader looking for a bug the code does not have
- *.
+ * the wrong side of that line, which sent a reader looking for a bug the code does not have.
  *
  * `rename` is injectable because a transient EPERM cannot be staged on a real file system —
  * every state that blocks a rename blocks it permanently — and `saveLedger` passes its own
@@ -1114,8 +1112,7 @@ export function archiveReport(
   stamp: Record<string, string> = {},
   // The worktree copy's removal, injectable for the reason `renameWithRetry`'s rename is:
   // a transient EPERM cannot be staged on a real file system — an open handle does not
-  // block a delete here (measured), and every state that does blocks it permanently
-  //.
+  // block a delete here (measured), and every state that does blocks it permanently.
   remove: (path: string) => void = (path) => rmSync(path, { force: true }),
   opts: { late?: boolean } = {},
 ): string | null {
@@ -1176,8 +1173,7 @@ export function archiveReport(
  * already published, and in the publish step a throw there skips the `record(() => "pr-open")`
  * that follows: the branch pushed and the pull request open with no ledger row for either.
  * The work is done by then, so the failure is a `process.emitWarning` naming the file
- * somebody has to clear, not a lost transition. Everything before the rename still throws
- *.
+ * somebody has to clear, not a lost transition. Everything before the rename still throws.
  *
  * The temp name carries the pid for the same reason `saveLedger` does: two processes
  * never share one. `recursive` on its cleanup because a directory in the way is what the
@@ -1468,8 +1464,8 @@ const MODES: readonly StageRun["mode"][] = ["fresh", "fix", "resume"];
  * future in `timeZone`), an ISO instant, or `clear`. Anything else throws with the forms
  * it accepts, instead of `new Date(v).toISOString()` throwing RangeError: the orchestrator
  * passes "the reset time if it names one", which is free-form text, and `+60m`, `3pm` and
- * `resets at 15:00` must not leave `limitedUntil` null, so that the next tick walks back
- * into the rate limit.
+ * `resets at 15:00` must not crash the command and leave `limitedUntil` null, which
+ * would send the next tick straight back into the rate limit.
  *
  * A clock time is a wall-clock time of the configured zone, not of the machine. Across a
  * daylight-saving change a time the zone skips resolves to the later valid instant and a
@@ -1562,7 +1558,7 @@ export function ledgerCli(
       }
       // `--branch` is the one field of this row that something later deletes on the
       // remote: a rollback pushes `--delete` on it when no worktree is registered, and
-      // that push is a child process of the engine, so a Bash-level guard never sees it.
+      // that push is made by the engine itself, so no command filter in front of a stage ever sees it.
       // Stored unvalidated, `set 9 claimed --branch develop` would be enough, and
       // `reconcile` keeps `existing?.branch` forever. The config is read here rather than
       // passed in from every caller, and only for this flag, so a root without one still

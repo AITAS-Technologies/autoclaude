@@ -58,6 +58,17 @@ function newHeld(root: string): Held {
   };
 }
 
+/**
+ * Locks this process holds right now, by lock directory. The directory lock excludes
+ * other processes; inside one process it is not enough. A synchronous caller blocks the
+ * event loop while it waits, so a sync caller that meets this process's own async holder
+ * could never see it finish, and after the staleness age would take the lock over as
+ * "stale" and run both critical sections at once. So a sync caller fails at once instead
+ * of waiting on itself, and async callers queue behind each other in `queues`.
+ */
+const heldHere = new Set<string>();
+const queues = new Map<string, Promise<unknown>>();
+
 type Attempt = "acquired" | "again" | { age: number; readable: boolean };
 
 /** One try at taking the lock. `again` means a stale lock was cleared: retry at once. */
@@ -125,6 +136,11 @@ function release(h: Held): void {
 
 export function withLedgerLock<T>(root: string, fn: () => T, waitMs: number = LOCK_WAIT_MS): T {
   const h = newHeld(root);
+  if (heldHere.has(h.lock)) {
+    throw new Error(
+      `ledger lock already held by this process (${h.lock}); a synchronous caller cannot wait for its own process's holder, so it must not run inside or beside a withLedgerLockAsync section`,
+    );
+  }
   const deadline = Date.now() + waitMs;
   for (;;) {
     const got = attempt(h);
@@ -133,9 +149,11 @@ export function withLedgerLock<T>(root: string, fn: () => T, waitMs: number = LO
     if (Date.now() > deadline) throw busy(h, got);
     sleepSync(POLL_MS);
   }
+  heldHere.add(h.lock);
   try {
     return fn();
   } finally {
+    heldHere.delete(h.lock);
     release(h);
   }
 }
@@ -151,17 +169,32 @@ export async function withLedgerLockAsync<T>(
   waitMs: number = LOCK_WAIT_MS,
 ): Promise<T> {
   const h = newHeld(root);
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    const got = attempt(h);
-    if (got === "acquired") break;
-    if (got === "again") continue;
-    if (Date.now() > deadline) throw busy(h, got);
-    await sleepAsync(POLL_MS);
-  }
-  try {
-    return await fn();
-  } finally {
-    release(h);
-  }
+  // In-process callers go one after the other before anyone polls the directory.
+  const before = queues.get(h.lock) ?? Promise.resolve();
+  const run = before.then(async () => {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const got = attempt(h);
+      if (got === "acquired") break;
+      if (got === "again") continue;
+      if (Date.now() > deadline) throw busy(h, got);
+      await sleepAsync(POLL_MS);
+    }
+    heldHere.add(h.lock);
+    try {
+      return await fn();
+    } finally {
+      heldHere.delete(h.lock);
+      release(h);
+    }
+  });
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(h.lock, settled);
+  void settled.then(() => {
+    if (queues.get(h.lock) === settled) queues.delete(h.lock);
+  });
+  return run;
 }

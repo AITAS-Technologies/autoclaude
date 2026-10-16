@@ -67,8 +67,7 @@ const cfg = {
 const now = new Date("2026-09-08T22:00:00Z");
 
 // Every temporary root this file makes, removed at the end: a test run left a tree per
-// case behind, and on the orchestrator machine the red step runs the suite all night
-//.
+// case behind, and on the orchestrator machine the red step runs the suite all night.
 const tempRoots: string[] = [];
 function tempRoot(prefix: string): string {
   const r = mkdtempSync(join(tmpdir(), prefix));
@@ -781,8 +780,8 @@ describe("ledgerCli and the archive", () => {
   });
 
   // The file name is what keeps the engine off a late report; the header is what tells a
-  // human, who reads `stage="code-review" n="1"` and has no other reason to doubt it
-  //. Its own counter makes that `n` collide with the
+  // human, who reads `stage="code-review" n="1"` and has no other reason to doubt it.
+  // Its own counter makes that `n` collide with the
   // numbered series by construction, so the header has to say which series it belongs to.
   it("stamps a late archive as late, and stamps nothing extra on the others", () => {
     const r = root();
@@ -1135,7 +1134,7 @@ describe("persistence and status", () => {
       l,
       126,
       "pr-open",
-      { title: "Umlauts", branch: "agent/126-u", worktree: "w", pr: 131 },
+      { title: "Fix it", branch: "agent/126-u", worktree: "w", pr: 131 },
       now,
     );
     saveLedger(root, l, now);
@@ -1159,6 +1158,8 @@ describe("persistence and status", () => {
   // The live instance is whatever the orchestrator last recorded in instance.json
   // (written by the orchestrator, only read here). Missing, empty, malformed or without
   // an id all mean: no instance is recorded.
+  // Replaces the source's recordedSession test: the stage record is pid + process start
+  // time + orchestrator instance (design § 10, last row), read from instance.json.
   it("recordedInstance returns the id or null for every unreadable state", () => {
     const root = tempRoot("autoclaude-instance-");
     const file = join(root, ".autoclaude", "state", "instance.json");
@@ -1241,6 +1242,8 @@ describe("the ledger lock, fresh attempts and the stage contract", () => {
     });
   });
 
+  // Changed by a listed change (design § 10, last row, stage record): `--stage` records
+  // `--instance`/`--pid` instead of the source's `--task`.
   it("clears the pull request number with --pr none and refuses a stage without an instance", () => {
     const r = root();
     ledgerCli(
@@ -1495,6 +1498,7 @@ describe("validation, the lock's owner, and live stages", () => {
 
   // The orchestrator passes "the reset time if it names one", which is free-form;
   // `new Date("+60m").toISOString()` threw and left limitedUntil null.
+  // Changed by a listed change (design § 13, explicit time zone): `parseLimit` takes the zone.
   it("reads every limit form it documents and refuses the rest by name", () => {
     expect(parseLimit("clear", now, "UTC")).toBeNull();
     expect(parseLimit("+60", now, "UTC")).toBe(new Date(now.getTime() + 3_600_000).toISOString());
@@ -1533,10 +1537,9 @@ describe("validation, the lock's owner, and live stages", () => {
 
   /**
    * And a flag given twice, which no unknown-option scan can catch: both spellings are
-   * known. `flag()` took `indexOf`, so the second value was dropped in silence — on
-   * The rollback that meant `--to blocked … --to ready` releasing as blocked and
-   * deleting the branches. One check in the one parser the three CLIs share
-   *.
+   * known. `flag()` took `indexOf`, so the second value was dropped in silence — for a
+   * rollback that meant `--to blocked … --to ready` releasing as blocked and deleting
+   * the branches. One check in the one parser every verb shares.
    */
   it("refuses a flag given twice rather than taking the first one", () => {
     const r = tempRoot("autoclaude-dup-flags-");
@@ -1554,8 +1557,8 @@ describe("validation, the lock's owner, and live stages", () => {
    * `--branch` is the field the rollback deletes on `origin` when no worktree is
    * registered, and the orchestrator composes that command itself from GitHub-derived
    * text. Stored unvalidated, `set 9 claimed --branch develop` put a protected name in
-   * reach of a `git push origin --delete` spawned inside an allow-listed script, where
-   * the Bash-level guard cannot see it. The rollback refuses
+   * reach of a `git push origin --delete` made by the engine itself, where nothing in
+   * front of a stage can see it. The rollback refuses
    * such a row as well; this is the half that stops it being written.
    */
   it("refuses a --branch outside the issue's own agent namespace", () => {
@@ -1569,9 +1572,8 @@ describe("validation, the lock's owner, and live stages", () => {
       // A refspec, which the prefix check alone waves through: the publish step read this row
       // and pushed it verbatim, and `git push origin agent/9-x:develop` sends the
       // worktree's branch — freshly rebased onto origin/develop — to remote `develop` as a
-      // fast-forward, with no pull request and no branch protection on this plan. `:main`
-      // is the same route to production and to the production migration workflow
-      //.
+      // fast-forward, with no pull request and no branch protection. `:main`
+      // is the same route to the production branch.
       "agent/9-x:develop",
       "agent/9-x:main",
       // And a name git itself refuses as a ref, which the prefix check also passes: the
@@ -1594,6 +1596,8 @@ describe("validation, the lock's owner, and live stages", () => {
    * root, never from the process's working directory; a root with none says so instead of
    * letting an unchecked branch name through.
    */
+  // Changed by a port note (port notes: explicit project root): the config comes from the
+  // given root, never from the process's working directory.
   it("reads the config for --branch from the project root when none is passed", () => {
     const bare = tempRoot("autoclaude-branch-gate-bare-");
     expect(() => ledgerCli(["set", "9", "claimed", "--branch", "agent/9-x"], bare, now)).toThrow(
@@ -1653,7 +1657,7 @@ describe("validation, the lock's owner, and live stages", () => {
       now,
     );
     const out = reconcile(l, { working: [], prs: [] }, [], cfg, now);
-    expect(out.issues["9"], "a running subagent must not be forgotten").toBeDefined();
+    expect(out.issues["9"], "a running stage process must not be forgotten").toBeDefined();
     expect(out.issues["9"]!.lastError).toMatch(/still running/);
     // Without a stage the entry is dropped, as before.
     const l2 = emptyLedger("me");
@@ -1712,7 +1716,7 @@ describe("a worktree the entry names but no longer has", () => {
 
 /**
  * The design's "A visible run": the layer below a transition. A human following a run
- * used to see "Waiting for 1 background agent" and nothing else, because which subagent
+ * used to see only that something was running, because which stage process
  * was working on what, since when, and what it last reported lived only in a transcript
  * nobody reads. Every issue now keeps an append-only `runs/<issue>/events.log` that the
  * stages and the engine write to, and `status.md` shows its tail per live stage.
@@ -1953,8 +1957,7 @@ describe("the events log per issue", () => {
  * rewritten on the next transition, while what the caller did is not: `ledger.json` is
  * renamed before `status.md` is, and the note's line is in the log before the status is
  * rendered. A throw here reported a failure for work that had already happened, and the
- * repeat — `set ... --bump fix` again, the milestone again — is what actually loses data
- *.
+ * repeat — `set ... --bump fix` again, the milestone again — is what actually loses data.
  *
  * The blocked rename is staged as a non-empty directory where the file belongs: no
  * rename can replace it, on any platform.
@@ -1995,7 +1998,7 @@ describe("a status.md write that loses its race", () => {
     readdirSync(dir).filter((f) => f.startsWith("status.md") && f !== "status.md");
 
   it("still saves the ledger, warns once, and leaves no tmp file", async () => {
-    const { r, dir } = blocked("autodev-status-race-");
+    const { r, dir } = blocked("autoclaude-status-race-");
     const l = emptyLedger("me");
     transition(l, 5, "claimed", { title: "t", branch: "agent/5-t", worktree: "w" }, now);
     const warned = await warningsFrom(() => saveLedger(r, l, now));
@@ -2006,7 +2009,7 @@ describe("a status.md write that loses its race", () => {
   });
 
   it("still notes the line and returns it, so the caller does not repeat the milestone", async () => {
-    const { r, dir } = blocked("autodev-status-race-note-");
+    const { r, dir } = blocked("autoclaude-status-race-note-");
     let noted: unknown;
     const warned = await warningsFrom(() => {
       noted = ledgerCli(["note", "12", "gate lint pass"], r, now);
@@ -2026,8 +2029,7 @@ describe("a status.md write that loses its race", () => {
  * seconds. The `status.md` writer next to it got its retry loop because of exactly that
  * reader — its comment names the watcher — while the ledger rename did not: a `set`
  * that lost the race exited 1 and left `ledger.json.<pid>.tmp` behind, and the repeat is
- * what loses data, `set … --bump fix` a second time counting the attempt twice
- *.
+ * what loses data, `set … --bump fix` a second time counting the attempt twice.
  *
  * The retry itself is driven through the injected rename, because a transient EPERM cannot
  * be staged: a spy on `renameSync` is not available (vitest cannot redefine an ESM
@@ -2111,8 +2113,7 @@ describe("the ledger's own rename", () => {
    * member of `RETRY_CODES`, so that code is retried six times and the sentence sent a
    * reader looking for a bug that is not there. On Windows an EACCES on a rename is usually
    * the transient lock the loop exists for, so the code is right and the prose was wrong —
-   * and prose is fixed by a test that reads it, or it drifts again
-   *.
+   * and prose is fixed by a test that reads it, or it drifts again.
    */
   it("describes the set it retries on, rather than a different one", () => {
     const source = readFileSync("src/engine/ledger/ledger.ts", "utf8");
@@ -2169,8 +2170,7 @@ describe("the ledger's own rename", () => {
  * A full disk or an EACCES mid-write throws out of `writeStatus` deliberately — that is a
  * bug or a broken machine, not a lost race — but the half-written temp file was left
  * behind, and it is named after the process. Every `set` and every `note` is a one-shot
- * CLI process, so no later run reuses that pid's name and nothing ever swept it up
- *.
+ * CLI process, so no later run reuses that pid's name and nothing ever swept it up.
  */
 describe("a status.md temp file that cannot be written", () => {
   it("removes what is left at the temp path and still throws", () => {

@@ -6,6 +6,8 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   emptyLedger,
+  updateLedger,
+  withLedgerLock,
   loadLedger,
   saveLedger,
   withLedgerLockAsync,
@@ -116,5 +118,44 @@ describe("withLedgerLock across processes", () => {
       }),
     ).rejects.toThrow("boom");
     expect(await withLedgerLockAsync(r, () => 7, 500)).toBe(7);
+  });
+
+  // One process, both lock flavours: a sync caller blocks the event loop while it waits,
+  // so waiting on this process's own async holder could never end (and after the stale age
+  // it would take the lock over and overlap). It must fail at once instead.
+  it("refuses a sync lock attempt at once while an async holder in this process awaits", async () => {
+    const r = root();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((res) => (release = res));
+    let entered: () => void = () => {};
+    const inside = new Promise<void>((res) => (entered = res));
+    const holder = withLedgerLockAsync(r, async () => {
+      entered();
+      await gate;
+    });
+    await inside;
+    const started = Date.now();
+    expect(() => withLedgerLock(r, () => 1)).toThrow(/already held by this process/);
+    expect(() => updateLedger(r, () => 1)).toThrow(/already held by this process/);
+    expect(Date.now() - started, "thrown immediately, not after waiting").toBeLessThan(1000);
+    release();
+    await holder;
+    expect(
+      withLedgerLock(r, () => 2),
+      "and free again afterwards",
+    ).toBe(2);
+  });
+
+  it("runs concurrent async lock users in one process one after the other", async () => {
+    const r = root();
+    const log: string[] = [];
+    const user = (name: string) =>
+      withLedgerLockAsync(r, async () => {
+        log.push(`${name} in`);
+        await new Promise((done) => setTimeout(done, 50));
+        log.push(`${name} out`);
+      });
+    await Promise.all([user("a"), user("b"), user("c")]);
+    expect(log).toEqual(["a in", "a out", "b in", "b out", "c in", "c out"]);
   });
 });

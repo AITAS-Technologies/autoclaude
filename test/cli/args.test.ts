@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 import { flag, issueArg, prArg } from "../../src/cli/args.js";
 
 /**
- * "Is this an issue number" had two rules and five spellings: `> 0` in `appendNote`, the
- * `note` verb, `rollback.ts` and `watch.ts`, and a bare `Number.isInteger` in `set`,
- * `claim.ts`, `worktree.ts` and `publish.ts`. `set 0 claimed` wrote a row keyed `"0"` and
- * then warned about `runs/0/events.log` through its own note. One exported helper now, and
- * `Number` is not what decides: `0x10` is 16 and `1e2` is 100, both whole and positive, so
- * an entry would be written under a number nobody typed and every later command would look
- * for it under the one they did.
+ * "Is this an issue number" must have one rule. A bare `> 0` or `Number.isInteger` lets
+ * `set 0 claimed` write a row keyed `"0"`, and `Number` is not what decides: `0x10` is 16
+ * and `1e2` is 100, both whole and positive, so an entry would be written under a number
+ * nobody typed and every later command would look for it under the one they did.
  */
 describe("issueArg", () => {
   it("takes decimal digits and nothing else, naming the token it refuses", () => {
@@ -42,7 +39,7 @@ describe("issueArg", () => {
       expect(() => issueArg(bad, "usage line"), String(bad)).toThrow(/is not an issue number/);
     }
     // The usage line is in the message, because these throws reach a terminal.
-    expect(() => issueArg("0", "rollback <issue>")).toThrow(/rollback <issue>/);
+    expect(() => issueArg("0", "release <issue>")).toThrow(/release <issue>/);
     // The positive control for the pair above: the largest token that is its own number.
     expect(issueArg("9007199254740991", "u")).toBe(9007199254740991);
   });
@@ -73,16 +70,14 @@ describe("args.ts, the module the CLIs share", () => {
 });
 
 /**
- * A pull request number is the same rule about a different thing, and the two CLIs that
- * take one had the rule `issueArg` was written to replace: a bare `Number.isInteger`, so
- * `can-merge 0x10` asked GitHub about pull request 16 and `post-review 0x10` posted a
- * review onto it. Both are the reads and writes an operator types at a terminal, and 16
- * is a plausible pull request number in this repository.
+ * A pull request number is the same rule about a different thing: a bare
+ * `Number.isInteger` would take `0x10` as pull request 16 and ask GitHub about a number
+ * nobody typed.
  *
- * `positiveInteger` is the shared body, and `what` is the only difference — so the two
+ * `positiveInteger` is the shared body, and `what` is the only difference, so the two
  * cannot drift apart on what a whole positive number is, and neither can claim the other's
  * noun. `issueArg`'s message is unchanged by the generalisation, which the describe above
- * and the five-CLI spawn test below both pin.
+ * pins.
  */
 describe("prArg", () => {
   it("takes decimal digits and nothing else, naming the token and what it is not", () => {
@@ -107,7 +102,7 @@ describe("prArg", () => {
       expect(() => prArg(bad, "usage line"), String(bad)).toThrow(/is not a pull request number/);
     }
     // The usage line is in the message, because these throws reach a terminal.
-    expect(() => prArg("0x10", "can-merge <pr> [--json]")).toThrow(/can-merge <pr> \[--json\]/);
+    expect(() => prArg("0x10", "merge-check <pr> [--json]")).toThrow(/merge-check <pr> \[--json\]/);
     // And it says "pull request", not "issue": the two nouns are what tells an operator
     // which of the two numbers they mistyped.
     expect(() => prArg("0x10", "u")).not.toThrow(/issue number/);
