@@ -37,7 +37,11 @@ function expandIncludes(
   text: string,
   chain: string[],
   readInclude: (path: string) => string,
+  vars: Record<string, string>,
+  top: string,
 ): string {
+  const where =
+    chain.length === 0 ? top : `${chain.at(-1)} (included via ${[top, ...chain].join(" -> ")})`;
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -50,6 +54,14 @@ function expandIncludes(
     const rest = text.slice(at);
     const m = INC.exec(rest);
     if (!m) {
+      const v = VAR.exec(rest);
+      if (!v) {
+        const snippet = rest.slice(0, 40).split(/\r?\n/)[0];
+        throw new Error(`unreplaced "{{" in ${where}: ${snippet}`);
+      }
+      if (!Object.hasOwn(vars, v[1] as string)) {
+        throw new Error(`unknown variable "${v[1]}" in ${where}`);
+      }
       out += "{{";
       i = at + 2;
       continue;
@@ -58,7 +70,7 @@ function expandIncludes(
     if (chain.includes(path)) {
       throw new Error(`include cycle: ${[...chain, path].join(" -> ")}`);
     }
-    out += expandIncludes(readInclude(path), [...chain, path], readInclude);
+    out += expandIncludes(readInclude(path), [...chain, path], readInclude, vars, top);
     i = at + m[0].length;
   }
   return out;
@@ -69,9 +81,9 @@ export function renderTemplate(
   text: string,
   vars: Record<string, string>,
   readInclude: (path: string) => string,
-  name = "template",
+  name: string,
 ): string {
-  const expanded = expandIncludes(text, [], readInclude);
+  const expanded = expandIncludes(text, [], readInclude, vars, name);
   let out = "";
   let i = 0;
   while (i < expanded.length) {
@@ -87,7 +99,7 @@ export function renderTemplate(
       throw new Error(`unreplaced "{{" in ${name}: ${snippet}`);
     }
     const key = m[1] as string;
-    if (!Object.prototype.hasOwnProperty.call(vars, key)) {
+    if (!Object.hasOwn(vars, key)) {
       throw new Error(`unknown variable "${key}" in ${name}`);
     }
     out += vars[key] as string;

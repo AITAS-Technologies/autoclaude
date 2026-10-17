@@ -16,58 +16,73 @@ const files = (m: Record<string, string>) => (p: string) => {
 
 describe("renderTemplate", () => {
   it("substitutes variables", () => {
-    expect(renderTemplate("a {{x}} b {{y_2}} {{x}}", { x: "1", y_2: "2" }, none)).toBe("a 1 b 2 1");
+    expect(renderTemplate("a {{x}} b {{y_2}} {{x}}", { x: "1", y_2: "2" }, none, "t.md")).toBe(
+      "a 1 b 2 1",
+    );
   });
 
   it("allows unused variables", () => {
-    expect(renderTemplate("hi", { x: "1" }, none)).toBe("hi");
+    expect(renderTemplate("hi", { x: "1" }, none, "t.md")).toBe("hi");
   });
 
   it("throws on an unknown variable naming it", () => {
-    expect(() => renderTemplate("a {{nope}}", {}, none)).toThrow(/nope/);
+    expect(() => renderTemplate("a {{nope}}", {}, none, "t.md")).toThrow(/nope/);
   });
 
   it("expands includes, appending .md when absent", () => {
     const read = files({ "common/rules.md": "RULES {{x}}", "b.md": "B" });
-    expect(renderTemplate("{{> common/rules}} | {{> b.md}}", { x: "1" }, read)).toBe("RULES 1 | B");
+    expect(renderTemplate("{{> common/rules}} | {{> b.md}}", { x: "1" }, read, "t.md")).toBe(
+      "RULES 1 | B",
+    );
   });
 
   it("expands nested includes", () => {
     const read = files({ "a.md": "A[{{> b}}]", "b.md": "B" });
-    expect(renderTemplate("{{> a}}", {}, read)).toBe("A[B]");
+    expect(renderTemplate("{{> a}}", {}, read, "t.md")).toBe("A[B]");
   });
 
   it("throws on an include cycle naming the chain", () => {
     const read = files({ "a.md": "{{> b}}", "b.md": "{{> a}}" });
-    expect(() => renderTemplate("{{> a}}", {}, read)).toThrow(/a\.md.*b\.md.*a\.md/);
+    expect(() => renderTemplate("{{> a}}", {}, read, "t.md")).toThrow(/a\.md.*b\.md.*a\.md/);
   });
 
   it.each(["../secret", "/etc/passwd", "a/../../x", "C:/x", "a\\..\\..\\x"])(
     "rejects an include path that escapes prompts/: %s",
     (p) => {
-      expect(() => renderTemplate(`{{> ${p}}}`, {}, files({}))).toThrow(/escape|outside|invalid/i);
+      expect(() => renderTemplate(`{{> ${p}}}`, {}, files({}), "t.md")).toThrow(
+        /escape|outside|invalid/i,
+      );
     },
   );
 
   it("throws on an unreplaced {{ that is not a variable or include", () => {
-    expect(() => renderTemplate("a {{ bad name }}", {}, none)).toThrow(/\{\{/);
-    expect(() => renderTemplate("a {{", {}, none)).toThrow(/\{\{/);
-    expect(() => renderTemplate("{{1x}}", {}, none)).toThrow(/\{\{/);
+    expect(() => renderTemplate("a {{ bad name }}", {}, none, "t.md")).toThrow(/\{\{/);
+    expect(() => renderTemplate("a {{", {}, none, "t.md")).toThrow(/\{\{/);
+    expect(() => renderTemplate("{{1x}}", {}, none, "t.md")).toThrow(/\{\{/);
   });
 
   it("inserts values verbatim and never re-scans them", () => {
-    expect(renderTemplate("<{{x}}> {{y}}", { x: "{{y}} {{> z}} {{", y: "Y" }, none)).toBe(
+    expect(renderTemplate("<{{x}}> {{y}}", { x: "{{y}} {{> z}} {{", y: "Y" }, none, "t.md")).toBe(
       "<{{y}} {{> z}} {{> Y",
     );
   });
 
   it("does not interpret $ patterns in values", () => {
-    expect(renderTemplate("{{x}}", { x: "$& $1 $$" }, none)).toBe("$& $1 $$");
+    expect(renderTemplate("{{x}}", { x: "$& $1 $$" }, none, "t.md")).toBe("$& $1 $$");
   });
 
-  it("names the template in the unknown-variable error", () => {
+  it("names the template for a top-level unknown variable", () => {
+    expect(() => renderTemplate("{{gone}}", {}, none, "top.md")).toThrow(/gone.*top.md/);
+  });
+
+  it("names the included file for an unknown variable inside an include", () => {
     const read = files({ "inc.md": "{{gone}}" });
-    expect(() => renderTemplate("{{> inc}}", {}, read)).toThrow(/gone/);
+    expect(() => renderTemplate("{{> inc}}", {}, read, "top.md")).toThrow(/gone.*inc.md.*top.md/);
+  });
+
+  it("names the included file for a stray {{ inside an include", () => {
+    const read = files({ "inc.md": "x {{ bad }}" });
+    expect(() => renderTemplate("{{> inc}}", {}, read, "top.md")).toThrow(/inc.md.*top.md/);
   });
 });
 

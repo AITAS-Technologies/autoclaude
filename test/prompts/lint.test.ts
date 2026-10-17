@@ -57,7 +57,10 @@ describe("prompt lint", () => {
     const file = join(all, name);
     it.skipIf(!existsSync(file))(`${name} names ${marker} and {{reportFile}}`, () => {
       const text = readFileSync(file, "utf8");
-      expect(text).toContain(marker);
+      // Own-line markers: AUTODEV-PLAN is a substring of AUTODEV-PLAN-END and
+      // AUTODEV-PLAN-REVIEW, so match each spelling exactly.
+      expect(text).toMatch(new RegExp(`^${marker}\\r?$`, "m"));
+      expect(text).toMatch(new RegExp(`^${marker}-END\\r?$`, "m"));
       expect(text).toContain("{{reportFile}}");
     });
   }
