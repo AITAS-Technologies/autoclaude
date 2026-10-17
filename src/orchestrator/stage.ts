@@ -160,8 +160,14 @@ export async function runStage(
       ? join(runDir, "triage-report.md")
       : join(worktree, reportPath(stage));
     const planFile = join(worktree, PLANS_DIR, `${issue}.md`);
-    // A report left by an earlier run must never be read as this run's.
-    if (!triage) rmSync(reportFile, { force: true });
+    if (!triage) {
+      // The stage's fence denies mkdir, so its directories exist before it starts.
+      mkdirSync(join(worktree, ".autoclaude", "state", "reports"), { recursive: true });
+      mkdirSync(join(worktree, PLANS_DIR), { recursive: true });
+      // A report left by an earlier run must never be read as this run's; a resumed stage
+      // may have finished before the caller crashed, and its report is kept.
+      if (mode !== "resume") rmSync(reportFile, { force: true });
+    }
 
     const dispatch: Dispatch = {
       issue: prefetchIssue(ctx.forge, issue),
@@ -217,31 +223,43 @@ export async function runStage(
     return stopped(`${stage}: the stage did not start: ${String(error)}`);
   }
 
-  // Triage has no ledger stage (the stage record's names are the pipeline stages).
-  const record = !triage && Number.isInteger(proc.pid) && proc.pid > 0;
-  if (record) {
+  // Quiet rejection if we kill the child before awaiting `done`.
+  proc.done.catch(() => {});
+  const killAndStop = async (why: string): Promise<StageOutcome> => {
+    // A child nobody recorded is one nobody can recognise after a crash: do not leave it running.
+    await proc.kill().catch(() => {});
+    return stopped(`${stage}: ${why}`);
+  };
+
+  // Triage has no ledger stage (the stage record's names are the pipeline stages). The record
+  // stays after the child exits: it says "this stage ran", and the caller that consumes the
+  // outcome (G3) clears it, so a crash in between reads as a finished stage, not a stalled one.
+  if (!triage) {
+    if (!Number.isInteger(proc.pid) || proc.pid <= 0)
+      return killAndStop(`the runtime returned no usable pid (${String(proc.pid)})`);
     try {
       const processStartedAt = processStartTime(proc.pid);
-      updateLedger(
+      const written = updateLedger(
         root,
         (ledger) => {
           const e = ledger.issues[String(issue)];
-          if (e)
-            e.stage = {
-              stage: stage as "plan" | "implement",
-              mode,
-              pid: proc.pid,
-              instance: ctx.instance,
-              startedAt: proc.startedAt,
-              processStartedAt,
-            };
+          if (!e) return false;
+          e.stage = {
+            stage: stage as "plan" | "implement",
+            mode,
+            pid: proc.pid,
+            instance: ctx.instance,
+            startedAt: proc.startedAt,
+            processStartedAt,
+          };
+          return true;
         },
         ctx.now(),
       );
+      if (!written)
+        return killAndStop(`the ledger has no entry for #${issue} to record the stage in`);
     } catch (error) {
-      // A child nobody recorded is one nobody can recognise after a crash: do not leave it running.
-      await proc.kill().catch(() => {});
-      return stopped(`${stage}: the stage record could not be written: ${String(error)}`);
+      return killAndStop(`the stage record could not be written: ${String(error)}`);
     }
   }
 
@@ -251,21 +269,6 @@ export async function runStage(
   } catch (error) {
     result = failedResult(ctx, String(error));
     ctx.notes(issue, `${stage}: the stage process failed: ${String(error)}`);
-  }
-
-  if (record) {
-    try {
-      updateLedger(
-        root,
-        (ledger) => {
-          const e = ledger.issues[String(issue)];
-          if (e?.stage?.pid === proc.pid && e.stage.instance === ctx.instance) e.stage = null;
-        },
-        ctx.now(),
-      );
-    } catch (error) {
-      ctx.notes(issue, `${stage}: the stage record could not be cleared: ${String(error)}`);
-    }
   }
 
   for (const denial of result.permissionDenials ?? []) {

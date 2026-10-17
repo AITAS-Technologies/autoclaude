@@ -11,9 +11,10 @@
  * Nothing here reads or writes the user's own Claude settings: the object is written per
  * run into the run directory (Task G1) and handed over with `--settings`.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { matchesAny } from "../../config/globs.js";
 import type { ProjectConfig } from "../../config/types.js";
 
 /**
@@ -150,6 +151,35 @@ export const HOOK_TIMEOUT_SECONDS = 30;
 const underWorktree = (rule: string, glob: string): string =>
   `${rule}/${glob.replace(/^(\.\/|\/)+/, "")}`;
 
+/** Representative paths of the files a plan and an implement stage must be able to write. */
+const REPORT_SAMPLE = ".autoclaude/state/reports/plan.md";
+const PLAN_SAMPLE = ".autoclaude/state/plans/1.md";
+
+/**
+ * What a forbidden glob that covers the report and plan paths (the example `.autoclaude/**`)
+ * becomes instead. A deny rule beats an allow rule, so the glob is split: the files directly
+ * under `.autoclaude/` (the committed config) and under `.autoclaude/state/` stay denied, and
+ * so does every other subdirectory present now; `state/reports` and `state/plans` stay
+ * writable. Publish's forbidden-path diff check remains the backstop for anything committed.
+ */
+function reportCarveOut(worktree: string): string[] {
+  const dirs = (rel: string, keep: string[]): string[] => {
+    try {
+      return readdirSync(join(worktree, rel), { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !keep.includes(d.name))
+        .map((d) => `${rel}/${d.name}/**`);
+    } catch {
+      return [];
+    }
+  };
+  return [
+    ".autoclaude/*",
+    ".autoclaude/state/*",
+    ...dirs(".autoclaude", ["state"]),
+    ...dirs(".autoclaude/state", ["reports", "plans"]),
+  ];
+}
+
 /**
  * The `--settings` object for one Claude stage run in `worktree`.
  *
@@ -181,7 +211,8 @@ export function claudeSettings(
       : [...LOCAL_GIT, ...ENGINE_VERBS, ...SHELL_VERBS]
     ).flatMap(bash),
     // A prefix followed by a space and a star: `npx tool sub new *` cannot match `... newx`.
-    ...cfg.fence.allow.map((p) => `Bash(${p} *)`),
+    // A project prefix may write, so a read-only stage gets none.
+    ...(readOnly ? [] : cfg.fence.allow).map((p) => `Bash(${p} *)`),
   ];
   const deny = [
     "PowerShell",
@@ -200,7 +231,10 @@ export function claudeSettings(
       // A path without glob characters names a file or a directory: deny both readings.
       const dir = g.replace(/\/+$/, "");
       const globs = RULE_SYNTAX.test(g) ? [g] : [dir, `${dir}/**`];
-      return globs.flatMap((x) => [
+      const covers = globs.some(
+        (x) => matchesAny(REPORT_SAMPLE, [x]) || matchesAny(PLAN_SAMPLE, [x]),
+      );
+      return (covers ? reportCarveOut(worktree) : globs).flatMap((x) => [
         `Edit(${underWorktree(root, x)})`,
         `Write(${underWorktree(root, x)})`,
       ]);

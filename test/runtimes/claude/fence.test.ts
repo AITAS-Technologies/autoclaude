@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadProjectConfig } from "../../../src/config/load.js";
+import { matchesAny } from "../../../src/config/globs.js";
 import type { ProjectConfig } from "../../../src/config/types.js";
 import {
   autoclaudeBinCommand,
@@ -87,6 +88,44 @@ describe("claudeSettings", () => {
     expect(s.hooks.PreToolUse[0]!.matcher).toBe("Bash");
     // The default is unchanged.
     expect(settings(wt).permissions.allow).toContain("Bash(git commit)");
+  });
+
+  it("readOnly: drops the project's fence.allow prefixes", () => {
+    const s = claudeSettings(config(), wt, BIN, "linux", { readOnly: true }) as Settings;
+    expect(s.permissions.allow.some((a) => a.includes("dbtool"))).toBe(false);
+    expect(settings(wt).permissions.allow.some((a) => a.includes("dbtool"))).toBe(true);
+  });
+
+  it("keeps state/reports and state/plans writable under forbiddenPaths .autoclaude/**", () => {
+    const dir = mkdtempSync(join(tmpdir(), "autoclaude-fence-"));
+    tmpDirs.push(dir);
+    for (const d of [".autoclaude/state/reports", ".autoclaude/state/runs", ".autoclaude/extra"])
+      mkdirSync(join(dir, d), { recursive: true });
+    const cfg = config((c) => {
+      c.forbiddenPaths = [".autoclaude/**"];
+    });
+    const s = claudeSettings(cfg, dir, BIN) as Settings;
+    const rule = claudePathRule(dir);
+    const denied = (rel: string, tool: string): boolean =>
+      s.permissions.deny
+        .filter((d) => d.startsWith(`${tool}(${rule}/`))
+        .map((d) => d.slice(`${tool}(${rule}/`.length, -1))
+        .some((glob) => matchesAny(rel, [glob]));
+    for (const tool of ["Edit", "Write"]) {
+      expect(denied(".autoclaude/state/reports/plan.md", tool)).toBe(false);
+      expect(denied(".autoclaude/state/plans/7.md", tool)).toBe(false);
+      expect(denied(".autoclaude/config.json", tool)).toBe(true);
+      expect(denied(".autoclaude/state/ledger.json", tool)).toBe(true);
+      expect(denied(".autoclaude/state/runs/7/x.json", tool)).toBe(true);
+      expect(denied(".autoclaude/extra/y.md", tool)).toBe(true);
+    }
+    // Other forbidden globs are unchanged.
+    expect(
+      settings(
+        wt,
+        config((c) => (c.forbiddenPaths = [".github/**"])),
+      ).permissions.deny,
+    ).toContain("Edit(//home/u/work tree/.github/**)");
   });
 
   it("uses the Phase 0 spelling for a Windows worktree", () => {

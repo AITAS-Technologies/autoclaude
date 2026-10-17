@@ -164,7 +164,8 @@ describe("runStage", () => {
     updateLedger(r.root, () => {});
     rt.finish();
     expect((await running).kind).toBe("report");
-    expect(entryOf(r).stage).toBeNull();
+    // Kept after exit: the caller that consumes the outcome clears it.
+    expect(entryOf(r).stage).toMatchObject({ pid: process.pid, instance: "inst-1" });
   });
 
   it("returns limit with the reset time and bumps no counter", async () => {
@@ -183,7 +184,46 @@ describe("runStage", () => {
     r.runtime({ result: { exit: "failed", resultText: "crashed" } });
     const out = await runStage(r.ctx, entryOf(r), "plan", "fresh");
     expect(out.kind).toBe("no-report");
-    expect(entryOf(r).stage).toBeNull();
+    expect(entryOf(r).stage).toMatchObject({ stage: "plan", pid: process.pid });
+  });
+
+  it("keeps an existing report in resume mode", async () => {
+    const r = rig();
+    mkdirSync(join(r.worktree, ".autoclaude", "state", "reports"), { recursive: true });
+    writeFileSync(join(r.worktree, ".autoclaude", "state", "reports", "plan.md"), PLAN);
+    r.runtime({ result: { exit: "failed" } });
+    const out = await runStage(r.ctx, entryOf(r), "plan", "resume");
+    expect(out).toMatchObject({ kind: "report", text: PLAN });
+  });
+
+  it("creates the report and plan directories before the stage starts", async () => {
+    const r = rig();
+    let seen: boolean[] = [];
+    r.runtime({
+      onStart: () => {
+        seen = ["reports", "plans"].map((d) =>
+          existsSync(join(r.worktree, ".autoclaude", "state", d)),
+        );
+      },
+    });
+    await runStage(r.ctx, entryOf(r), "plan", "fresh");
+    expect(seen).toEqual([true, true]);
+  });
+
+  it("kills the child and ends as no-report when the ledger has no entry to record in", async () => {
+    const r = rig();
+    const entry = { ...entryOf(r), issue: 99 };
+    let killed = false;
+    const rt = r.runtime({ hold: true });
+    const orig = rt.start.bind(rt);
+    rt.start = (req, cfg) => {
+      const p = orig(req, cfg);
+      return { ...p, kill: async () => void (killed = true) };
+    };
+    const out = await runStage(r.ctx, entry, "plan", "fresh");
+    expect(out.kind).toBe("no-report");
+    expect(killed).toBe(true);
+    expect(r.notes.join("\n")).toMatch(/no entry/);
   });
 
   it("reads the report with BOM and CRLF tolerated", async () => {
