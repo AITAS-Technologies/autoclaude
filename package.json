@@ -11,7 +11,8 @@
     "autoclaude": "dist/cli/main.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "prompts"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
