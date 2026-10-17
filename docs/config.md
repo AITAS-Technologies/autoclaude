@@ -91,6 +91,8 @@ Each entry of `gates` has:
 
 Project commands (`bootstrap`, `check`, `fix`, `redStep.run`, `redStep.install.run`) run through `bash -c` on every OS. On Windows that is the bash of Git for Windows.
 
+The default `worktrees.root`, `.autoclaude/worktrees`, lies inside the checkout. git ignores it, but your own tools in the main checkout may still see every worktree's files: a test runner's discovery, the `include` of a `tsconfig.json`, ESLint, a file watcher. Exclude the directory in those tools' configuration, or set `worktrees.root` to a directory outside the checkout, such as `../myproject-worktrees`.
+
 `worktrees.copy` entries, and `.autoclaude/state/`, are listed in a block between `# autoclaude: engine-owned paths (begin)` and `(end)` in `.git/info/exclude`, which every worktree and the main checkout read. autoclaude rewrites that block when the entries change and leaves the rest of the file alone. `publish` refuses a diff that commits one of them.
 
 `redStep.run` and `redStep.install.run` always run in the stage environment, with no forge credential and no git access over https or ssh ([security](security.md#layer-1-the-stage-environment)). So does `bootstrap`, except in a fresh worktree of the integration branch before any stage has run in it: a worktree recreated from a pushed agent branch, and a pull request's head under `autoclaude review --pr`, hold a stage's work. An install that needs credentials (a private registry, a dependency fetched over git) fails there.

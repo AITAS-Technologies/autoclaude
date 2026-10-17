@@ -43,6 +43,8 @@ autoclaude init --create-labels
 
 `init` writes `.autoclaude/config.json`, `.autoclaude/project.md` and `.autoclaude/invariants.md` from templates (it never overwrites an existing file) and adds three lines to `.gitignore`: `.autoclaude/state/`, `.autoclaude/worktrees/` and `.autoclaude/config.local.json`. With `--create-labels` it creates the labels your configuration names that the repository lacks.
 
+The worktrees go under `.autoclaude/worktrees/` by default, inside the checkout, where your own test runner, `tsc` or ESLint may pick them up. Exclude that directory in their configuration, or set `worktrees.root` to a directory outside the checkout ([docs/config.md](docs/config.md)).
+
 Then edit `.autoclaude/`:
 
 - `config.json`: the branches, quality gates, test-file patterns, labels, forbidden paths, caps and the model for each stage. Every key is described in [docs/config.md](docs/config.md). Commit this file.
