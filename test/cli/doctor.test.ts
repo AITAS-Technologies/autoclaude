@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { doctorVerb } from "../../src/cli/doctor.js";
@@ -7,7 +7,15 @@ import { VERBS, type Verb } from "../../src/cli/main.js";
 import { loadProjectConfig } from "../../src/config/load.js";
 import type { ProjectConfig } from "../../src/config/types.js";
 import { Forge } from "../../src/forge/github.js";
-import { capture, cleanupTemps, envFor, routed, tempRepo, type Route } from "../helpers/cli-env.js";
+import {
+  capture,
+  cleanupTemps,
+  envFor,
+  routed,
+  tempDir,
+  tempRepo,
+  type Route,
+} from "../helpers/cli-env.js";
 
 afterAll(cleanupTemps);
 
@@ -330,5 +338,31 @@ describe("autoclaude doctor", () => {
   it("is a verb of the table", () => {
     const verb: Verb = VERBS.doctor!;
     expect(verb).toBeTypeOf("function");
+  });
+
+  // F12: the fence refuses a worktree under a path with permission-rule syntax, so every
+  // claimed issue would spend its retries on the refusal. doctor fails first, naming both.
+  it("fails, naming the character and the path, when worktrees.root holds rule syntax", async () => {
+    const root = await healthyRepo();
+    const path = join(root, ".autoclaude", "config.json");
+    const doc = JSON.parse(readFileSync(path, "utf8"));
+    doc.worktrees = { ...doc.worktrees, root: "../trees (x86)" };
+    writeFileSync(path, JSON.stringify(doc, null, 2));
+    const r = await rigRun(root);
+    const l = line(r.lines, "paths")!;
+    expect(l).toMatch(/^fail paths — worktrees\.root .*trees \(x86\) contains "\(", /);
+    expect(r.code).toBe(1);
+  });
+
+  it("fails when the project root holds rule syntax, and passes a plain one", async () => {
+    const plain = await healthyRepo();
+    expect(line((await rigRun(plain)).lines, "paths")).toMatch(/^ok paths — /);
+    const odd = join(tempDir("autoclaude-doctor-"), "proj [old]");
+    cpSync(plain, odd, { recursive: true });
+    const r = await rigRun(odd);
+    expect(line(r.lines, "paths")).toMatch(
+      /^fail paths — the project root .*proj \[old\] contains "\[", /,
+    );
+    expect(r.code).toBe(1);
   });
 });

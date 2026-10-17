@@ -19,7 +19,7 @@ Read [docs/security.md](docs/security.md) before you point it at a repository yo
 
 Stages bill your Claude subscription. If `ANTHROPIC_API_KEY` is set in your environment, stages would bill the API instead. Remove it; `autoclaude doctor` warns when it is set.
 
-The project path must not contain any of `( ) * ? [ ] { }`. The permission rules for a stage cannot state such a path safely, so autoclaude refuses it instead of guessing.
+The project path must not contain any of `( ) * ? [ ] { }`, and neither may `worktrees.root`. The permission rules for a stage cannot state such a path safely, so autoclaude refuses it instead of guessing, and `autoclaude doctor` fails on it.
 
 ## Install
 
@@ -58,7 +58,7 @@ Check the setup:
 autoclaude doctor
 ```
 
-`doctor` checks the configuration, the git remote and integration branch, the `gh` login, the labels, the `claude` version, git, Git Bash on Windows and the `.gitignore` lines. It exits 1 when a check fails and prints a fix for each.
+`doctor` checks the configuration, the project and worktree paths, the git remote and integration branch, the `gh` login, the labels, the `claude` version, git, Git Bash on Windows and the `.gitignore` lines. It exits 1 when a check fails and prints a fix for each.
 
 Run one issue, attended, from claim to pull request:
 

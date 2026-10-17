@@ -143,7 +143,7 @@ const HOME_SECRETS = [
 ];
 
 /** The characters Claude Code reads as pattern or rule syntax. No escape is documented. */
-const RULE_SYNTAX = /[*?[\]{}()]/;
+export const RULE_SYNTAX = /[*?[\]{}()]/;
 /** Seconds a hook may run before Claude Code gives up (and fails open); above the guard's own watchdog. */
 export const HOOK_TIMEOUT_SECONDS = 30;
 

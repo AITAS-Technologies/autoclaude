@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ProjectConfig, StageSpec } from "../config/types.js";
 import { parseRepo } from "../forge/github.js";
+import { RULE_SYNTAX } from "../runtimes/claude/fence.js";
 import { TESTED_CLAUDE_MAJORS } from "../runtimes/claude/run.js";
 import { labelsOf } from "./labels.js";
 import { messageOf, realEnv, usageError, type Env } from "./common.js";
@@ -86,6 +87,26 @@ export async function doctorVerb(
     );
   }
   const remote = cfg?.forge.remote ?? "origin";
+
+  // Paths a stage's permission rules cannot state: the fence refuses a worktree under one, so
+  // every claimed issue would spend its retries on that refusal. A failure, not a warning.
+  const worktreesAt = resolve(root, cfg?.worktrees.root ?? ".autoclaude/worktrees");
+  let syntaxFree = true;
+  for (const [what, path] of [
+    ["the project root", root],
+    ["worktrees.root", worktreesAt],
+  ] as const) {
+    const ch = RULE_SYNTAX.exec(path.replace(/\\/g, "/"))?.[0];
+    if (ch === undefined) continue;
+    syntaxFree = false;
+    line(
+      "fail",
+      "paths",
+      `${what} ${path} contains "${ch}", which Claude Code's permission rules read as syntax, so no stage can run there; move the project, or set worktrees.root to a path without ( ) * ? [ ] { }`,
+    );
+  }
+  if (syntaxFree)
+    line("ok", "paths", "the project root and worktrees.root hold no permission-rule syntax");
 
   // git repository with the forge remote
   let repo: string | null = null;
