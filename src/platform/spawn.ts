@@ -20,6 +20,33 @@ export interface RunResult {
 const DETACH = process.platform !== "win32";
 
 /**
+ * The limits of the engine's own git and gh calls (R70). Every one is synchronous, so one that
+ * hangs (a half-open connection after a sleep, a credential manager waiting for a click) would
+ * otherwise freeze the event loop: no tick, no stage timer, no heartbeat. A call site that needs
+ * another limit passes its own.
+ */
+export const GIT_TIMEOUT_MS = 600_000;
+export const GH_TIMEOUT_MS = 120_000;
+
+/** `120 s`, or `250 ms` for a limit below a second. */
+export const limitText = (ms: number): string =>
+  ms >= 1000 && ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`;
+
+/**
+ * The environment of every engine git and gh call: `base` with credential prompts turned off,
+ * so a credential problem fails at once and reaches a note or a blocked reason instead of
+ * waiting for someone at a terminal. Names compare case-insensitively on Windows.
+ */
+export function nonInteractive(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const set: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" };
+  const env: NodeJS.ProcessEnv = {};
+  const fold = (k: string) => (process.platform === "win32" ? k.toUpperCase() : k);
+  const ours = new Set(Object.keys(set).map(fold));
+  for (const [k, v] of Object.entries(base)) if (!ours.has(fold(k))) env[k] = v;
+  return { ...env, ...set };
+}
+
+/**
  * Synchronous run through cross-spawn (never a shell for argv; `.cmd` shims are quoted
  * for cmd.exe by cross-spawn). `timeoutMs` uses the synchronous spawn's own timeout,
  * which kills only the direct child: on Windows a grandchild can survive. Use `run`

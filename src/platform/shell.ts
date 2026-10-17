@@ -1,6 +1,13 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { run, runSync, type RunOptions, type RunResult } from "./spawn.js";
+import {
+  GIT_TIMEOUT_MS,
+  nonInteractive,
+  run,
+  runSync,
+  type RunOptions,
+  type RunResult,
+} from "./spawn.js";
 
 /**
  * Path of the bash used for project commands. POSIX: `bash`. Windows: the bash of Git
@@ -10,7 +17,8 @@ export function bashPath(env: NodeJS.ProcessEnv = process.env): string {
   if (process.platform !== "win32") return "bash";
   const fromEnv = env.CLAUDE_CODE_GIT_BASH_PATH;
   if (fromEnv) return fromEnv;
-  const r = runSync("git", ["--exec-path"]);
+  // A local question, but an engine git call like any other (R70).
+  const r = runSync("git", ["--exec-path"], { env: nonInteractive(), timeoutMs: GIT_TIMEOUT_MS });
   if (r.status === 0) {
     const candidate = resolve(r.stdout.trim(), "..", "..", "..", "bin", "bash.exe");
     if (existsSync(candidate)) return candidate;

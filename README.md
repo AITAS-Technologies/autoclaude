@@ -13,6 +13,7 @@ Read [docs/security.md](docs/security.md) before you point it at a repository yo
 - Node 22 or newer.
 - git. Version 2.31 or newer is recommended; older versions work (`doctor` warns, and the stage environment still blocks forge access).
 - The GitHub CLI (`gh`), logged in (`gh auth login`) with access to the repository. Use a token without the `delete_repo` scope.
+- git able to fetch and push the repository without a prompt. The engine turns credential prompts off and gives each of its git calls 600 seconds and each `gh` call 120 seconds, so a missing login fails the step instead of waiting for you. With Git Credential Manager, sign in once by hand.
 - Claude Code (`claude`), logged in with a subscription.
 - On Windows, Git for Windows. Project commands run through its `bash`.
 

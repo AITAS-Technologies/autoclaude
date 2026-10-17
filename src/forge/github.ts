@@ -19,6 +19,8 @@ function run(
   opts?: { cwd?: string; input?: string },
 ): string {
   const r = exec(cmd, args, opts);
+  // A call killed at its limit is a failure like any other; the message names the limit.
+  if (r.timedOut) throw new Error(`${cmd} ${args.join(" ")} ${r.stderr.trim()}`);
   if (r.status !== 0) {
     throw new Error(`${cmd} ${args.join(" ")} failed (exit ${r.status}): ${r.stderr.trim()}`);
   }
