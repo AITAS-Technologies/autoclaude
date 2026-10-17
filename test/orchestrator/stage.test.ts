@@ -15,12 +15,8 @@ import type { ProjectConfig } from "../../src/config/types.js";
 import { loadLedger, transition, updateLedger } from "../../src/engine/ledger/ledger.js";
 import { Forge, type Exec } from "../../src/forge/github.js";
 import { prefetchIssue, prefetchPriorPrs } from "../../src/orchestrator/prefetch.js";
-import {
-  runStage,
-  TriageSchema,
-  type OrchestratorCtx,
-  type StageOutcome,
-} from "../../src/orchestrator/stage.js";
+import { runStage, type OrchestratorCtx, type StageOutcome } from "../../src/orchestrator/stage.js";
+import { TriageSchema } from "../../src/orchestrator/review/schemas.js";
 import type { Dispatch } from "../../src/prompts/dispatch.js";
 import { fakeRuntime, type FakeRuntime } from "../helpers/fake-runtime.js";
 

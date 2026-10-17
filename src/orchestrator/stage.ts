@@ -24,6 +24,7 @@ import { writeDispatch, type Dispatch } from "../prompts/dispatch.js";
 import { renderPrompt } from "../prompts/render.js";
 import type { RuntimeAdapter, StageRequest, StageResult } from "../runtimes/types.js";
 import { prefetchIssue } from "./prefetch.js";
+import { TriageSchema } from "./review/schemas.js";
 
 export interface OrchestratorCtx {
   root: string;
@@ -47,19 +48,6 @@ export type StageOutcome =
   | { kind: "report"; text: string; result: StageResult }
   | { kind: "no-report"; result: StageResult }
   | { kind: "limit"; resetsAt: string; result: StageResult };
-
-/** What triage answers with (the schema handed to the runtime; see `prompts/triage.md`). */
-export const TriageSchema = {
-  type: "object",
-  properties: {
-    decision: { enum: ["ready", "needs-shaping", "skipped"] },
-    reason: { type: "string" },
-    comment: { type: "string" },
-    proposedCriteria: { type: "array", items: { type: "string" } },
-  },
-  required: ["decision", "reason", "comment"],
-  additionalProperties: false,
-} as const;
 
 type Extra = {
   findingsMarkdown?: string;
