@@ -30,9 +30,13 @@
  * the repository finds the main directory's dependencies by resolution; `install` runs
  * in it only when the file it names differs between base and head. It is always removed
  * afterwards, also on an error or a timeout.
+ *
+ * Every command here executes what a stage wrote: the head's tests, and an install that reads
+ * the head's manifest. So each runs in the stage environment (R69), with no forge credential,
+ * and a scratch directory of its own that is removed with the base worktree.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -44,6 +48,7 @@ import { realExec, type Exec } from "../../forge/exec.js";
 import { git } from "../../forge/github.js";
 import { toPosix } from "../../platform/paths.js";
 import { runShell, shQuote } from "../../platform/shell.js";
+import { stageEnv } from "../../runtimes/stage-env.js";
 import { repoRoot } from "../root.js";
 import type { Verdict } from "./red-step-verdict.js";
 
@@ -230,8 +235,13 @@ export interface RedStepResult {
 
 type RedStepConfig = Pick<ProjectConfig, "redStep" | "worktrees">;
 
-/** Runs the configured command in `cwd` with `{files}` and `{report}` filled in. */
-async function runTests(cfg: RedStepConfig, cwd: string, files: string[]): Promise<RunResult> {
+/** Runs the configured command in `cwd` with `{files}` and `{report}` filled in, under `env`. */
+async function runTests(
+  cfg: RedStepConfig,
+  cwd: string,
+  files: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<RunResult> {
   const report = join(tmpdir(), `autoclaude-red-${randomBytes(4).toString("hex")}.xml`);
   // split/join, not replace: a quoted path may contain `$&` or `$'`, which replace expands.
   const command = cfg.redStep.run
@@ -240,7 +250,7 @@ async function runTests(cfg: RedStepConfig, cwd: string, files: string[]): Promi
     .split("{report}")
     .join(shQuote(toPosix(report)));
   try {
-    const r = await runShell(`exec 2>&1; ${command}`, { cwd, timeoutMs: RUN_TIMEOUT_MS });
+    const r = await runShell(`exec 2>&1; ${command}`, { cwd, env, timeoutMs: RUN_TIMEOUT_MS });
     const out = r.stdout + r.stderr;
     if (r.timedOut) return notRun(r.status, tail(`timed out after ${RUN_TIMEOUT_MS} ms\n${out}`));
     if (cfg.redStep.result === "exit-code") return runResultFromExitCode(out, r.status);
@@ -314,6 +324,8 @@ export async function runRedStep(
 
   const root = repoRoot(worktree);
   const baseWt = join(resolve(root, cfg.worktrees.root), `red-${randomBytes(4).toString("hex")}`);
+  const scratch = mkdtempSync(join(tmpdir(), "autoclaude-red-env-"));
+  const env = stageEnv(process.env, { scratchDir: scratch });
   try {
     git(["worktree", "add", "--detach", "--quiet", baseWt, base], exec, worktree);
 
@@ -328,6 +340,7 @@ export async function runRedStep(
     if (install !== undefined && differsBetween(exec, worktree, base, install.when)) {
       const r = await runShell(`exec 2>&1; ${install.run}`, {
         cwd: baseWt,
+        env,
         timeoutMs: RUN_TIMEOUT_MS,
       });
       if (r.status !== 0) {
@@ -342,8 +355,8 @@ export async function runRedStep(
       }
     }
 
-    const onBase = await runTests(cfg, baseWt, files);
-    const onHead = await runTests(cfg, worktree, files);
+    const onBase = await runTests(cfg, baseWt, files, env);
+    const onHead = await runTests(cfg, worktree, files, env);
     const v = verdict(onBase, onHead, addedPaths);
     return {
       verdict: v,
@@ -356,5 +369,6 @@ export async function runRedStep(
     };
   } finally {
     removeWorktree(exec, worktree, baseWt);
+    rmSync(scratch, { recursive: true, force: true });
   }
 }

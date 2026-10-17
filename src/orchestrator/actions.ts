@@ -3,10 +3,11 @@
  *
  * Every GitHub write goes through the C1 `Forge` (labels, comments) or the C4/C7 functions
  * built on it (claims and releases, publish); every git command through the engine's worktree
- * and publish code, with the normal environment. Only the stage processes get `stageEnv`, and
- * they get it inside the runtime. Ledger writes are short `updateLedger` bodies with no network
- * call inside; the stage processes run in the background, held by a `StageRegistry` the next
- * tick reads.
+ * and publish code, with the normal environment. The stage processes get `stageEnv` inside the
+ * runtime, and so does every command the engine runs on content a stage wrote (the red step,
+ * a bootstrap outside a fresh worktree: R69). Ledger writes are short `updateLedger` bodies
+ * with no network call inside; the stage processes run in the background, held by a
+ * `StageRegistry` the next tick reads.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -517,7 +518,14 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
         root,
         (l) => {
           const e = l.issues[String(issue)];
-          if (e) Object.assign(e, { worktree: made.worktree, branch: made.branch });
+          if (e)
+            Object.assign(e, {
+              worktree: made.worktree,
+              branch: made.branch,
+              // From a pushed agent branch it holds a stage's work: its bootstrap gets the
+              // stage environment (R69).
+              freshWorktree: made.fromIntegration,
+            });
         },
         ctx.now(),
       );
@@ -727,7 +735,12 @@ export async function takeIssue(
         l,
         n,
         "claimed",
-        { title: item.title, branch: made.branch, worktree: made.worktree },
+        {
+          title: item.title,
+          branch: made.branch,
+          worktree: made.worktree,
+          freshWorktree: made.fromIntegration,
+        },
         now,
       );
       appendNoteBestEffort(

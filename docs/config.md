@@ -91,6 +91,8 @@ Each entry of `gates` has:
 
 Project commands (`bootstrap`, `check`, `fix`, `redStep.run`, `redStep.install.run`) run through `bash -c` on every OS. On Windows that is the bash of Git for Windows.
 
+`redStep.run` and `redStep.install.run` always run in the stage environment, with no forge credential and no git access over https or ssh ([security](security.md#layer-1-the-stage-environment)). So does `bootstrap`, except in a fresh worktree of the integration branch before any stage has run in it: a worktree recreated from a pushed agent branch, and a pull request's head under `autoclaude review --pr`, hold a stage's work. An install that needs credentials (a private registry, a dependency fetched over git) fails there.
+
 ### Label rules
 
 Each entry of `labelRules` has `when` (non-empty list of path globs), `label` (required) and, optionally, `unless` (path globs that cancel the rule) and `suppressedBy` (a label that suppresses it).

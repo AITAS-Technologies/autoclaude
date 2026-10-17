@@ -97,6 +97,11 @@ export interface CreatedWorktree {
   missing: NotCopied[];
   /** Things the caller should log: a fallback that was taken, a remote tip that moved. */
   notes: string[];
+  /**
+   * The worktree starts at `<remote>/<integration>`, not at a pushed agent branch: what it holds
+   * was fetched, not written by a stage. The caller records it for the bootstrap (R69).
+   */
+  fromIntegration: boolean;
 }
 
 /**
@@ -172,7 +177,13 @@ export function createWorktree(
     throw new Error(`${error instanceof Error ? error.message : String(error)}${left}`);
   }
   mkdirSync(join(names.worktree, ".autoclaude", "state", "reports"), { recursive: true });
-  return { branch: names.branch, worktree: names.worktree, ...copy, notes };
+  return {
+    branch: names.branch,
+    worktree: names.worktree,
+    ...copy,
+    notes,
+    fromIntegration: base === `${remote}/${cfg.branches.integration}`,
+  };
 }
 
 /**

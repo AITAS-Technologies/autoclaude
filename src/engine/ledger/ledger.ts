@@ -106,6 +106,14 @@ export interface LedgerEntry {
    * limit is not the code's fault). Absent on entries written before the field existed.
    */
   limitedStage?: Stage | null;
+  /**
+   * True while the worktree holds `<remote>/<integration>` exactly as `createWorktree` checked
+   * it out: set when such a worktree is made, cleared when the first stage process is recorded
+   * in it. Only then does its bootstrap keep the engine's environment; a worktree recreated
+   * from a pushed agent branch, or one a stage has run in, is bootstrapped under the stage
+   * environment (R69). Absent reads as false, the safe side.
+   */
+  freshWorktree?: boolean;
 }
 
 export interface LedgerEvent {

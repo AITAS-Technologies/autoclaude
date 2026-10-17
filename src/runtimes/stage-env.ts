@@ -7,8 +7,9 @@ import { join } from "node:path";
  * Phase 0 spike S5 (docs/spikes/s5-stage-env.md).
  *
  * This is the layer that holds even when the command guard misses something. It is for stage
- * processes ONLY: the engine's own fetch, push and every `gh` call run with the normal
- * environment.
+ * processes and for the commands the engine runs on what a stage wrote (the red step's install
+ * and test runs, a bootstrap outside a fresh worktree: R69). The engine's own fetch, push and
+ * every `gh` call run with the normal environment.
  *
  * `GIT_CONFIG_PARAMETERS` (what `git -c` uses) is the closer that works on every git; git
  * before 2.31 ignores `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`, which are appended as well for

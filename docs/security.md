@@ -10,7 +10,14 @@ The protection against a stage reaching the forge anyway is three layers. Each i
 
 ### Layer 1: the stage environment
 
-Every stage process, and everything it runs (gates and tests included), starts in an environment built by `src/runtimes/stage-env.ts`:
+Every stage process, and everything it runs (gates and tests included), starts in an environment built by `src/runtimes/stage-env.ts`. The engine runs these commands of its own in the same environment, because each executes content a stage wrote:
+
+- the red step of the code review: its install and both of its test runs (the head's tests, on the base and on the head), also under `autoclaude review --pr`;
+- the project's `bootstrap` in a worktree recreated from a pushed agent branch, in a worktree a stage has already run in, and on a pull request's head in `autoclaude review --pr`.
+
+The engine's other commands keep your normal environment and credentials: every `git` fetch, rebase and push, every `gh` call, and the `bootstrap` of a fresh worktree created from `<remote>/<integration>` before any stage has run in it, which executes the integration branch as fetched.
+
+The stage environment:
 
 - `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, `SSH_ASKPASS`, `GIT_SSH` and `GIT_SSH_COMMAND` are removed.
 - `GH_CONFIG_DIR` points to an empty directory, so `gh` reports that it is not logged in.

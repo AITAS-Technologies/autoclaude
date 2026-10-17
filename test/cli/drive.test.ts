@@ -387,6 +387,7 @@ describe("autoclaude review --pr", () => {
     issue: number;
     secret: boolean;
     bootstraps: number;
+    bootLog: string;
   }
 
   function rig(
@@ -403,7 +404,8 @@ describe("autoclaude review --pr", () => {
     if (opts.prepared) {
       const path = join(root, ".autoclaude", "config.json");
       const doc = JSON.parse(readFileSync(path, "utf8"));
-      doc.bootstrap = "echo ran >> bootstrap.log";
+      // What the bootstrap saw of the stage marker: a pull request's head is a stage's work (R69).
+      doc.bootstrap = 'echo "ran ${AUTOCLAUDE_STAGE:-none}" >> bootstrap.log';
       doc.worktrees = { root: ".autoclaude/worktrees", copy: ["secret.env", "absent.env"] };
       writeFileSync(path, JSON.stringify(doc));
       writeFileSync(join(root, "secret.env"), "TOKEN=x\n");
@@ -477,6 +479,7 @@ describe("autoclaude review --pr", () => {
           issue: entry.issue,
           secret: existsSync(join(entry.worktree, "secret.env")),
           bootstraps: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0,
+          bootLog: existsSync(log) ? readFileSync(log, "utf8").trim() : "",
         });
         if (opts.outcome === "hang") await c.runtimes("claude").start({} as never, c.cfg).done;
         return opts.outcome === "limit"
@@ -521,6 +524,8 @@ describe("autoclaude review --pr", () => {
     const c = capture();
     expect(await reviewVerb(["--pr", "40"], c.io, "x", r.deps)).toBe(0);
     expect(r.calls[0]).toMatchObject({ secret: true, bootstraps: 1 });
+    // R69: the head is a stage's work, so its bootstrap ran in the stage environment.
+    expect(r.calls[0]!.bootLog).toBe("ran 1");
     // F1: an entry the copy skipped is said on stderr, not dropped.
     expect(c.errText()).toContain(
       "worktrees.copy: absent.env was not copied: the project root has no such file",

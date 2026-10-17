@@ -559,6 +559,25 @@ describe("tick: Step 2 settles finished stages", () => {
     expect(loadLedger(r.root).limitedUntil).toBeNull();
   });
 
+  // R69: whether the bootstrap may keep the engine's environment is recorded by whoever makes the
+  // worktree; a worktree recreated from a pushed agent branch holds a stage's work.
+  it("records whether a recreated worktree is fresh from the integration branch", async () => {
+    for (const fromIntegration of [false, true]) {
+      const r = rig();
+      const wt = r.seed(42, "implementing", { pushedSha: "abc1234" });
+      rmSync(wt, { recursive: true, force: true });
+      r.worktrees.splice(r.worktrees.indexOf(wt), 1);
+      r.seams.createWorktree.impl = () => {
+        mkdirSync(wt, { recursive: true });
+        return { branch: "agent/42-issue-42", worktree: wt, copied: [], missing: [], notes: [], fromIntegration }; // prettier-ignore
+      };
+      r.seams.runStage.impl = () => new Promise(() => {});
+      await tick(r.ctx);
+      expect(r.seams.createWorktree.calls, String(fromIntegration)).toHaveLength(1);
+      expect(r.entry(42)?.freshWorktree, String(fromIntegration)).toBe(fromIntegration);
+    }
+  });
+
   it("a limit records the reset, holds every dispatch until then, and re-dispatches after it", async () => {
     const r = rig();
     r.seed(42, "claimed");
@@ -979,7 +998,14 @@ describe("tick: Step 4 and the control files", () => {
     r.seams.createWorktree.impl = (issue) => {
       const worktree = join(r.root, ".autoclaude", "worktrees", `agent+${issue}-fix-login`).replaceAll("\\", "/"); // prettier-ignore
       mkdirSync(worktree, { recursive: true });
-      return { branch: `agent/${issue}-fix-login`, worktree, copied: [], missing: [], notes: [] };
+      return {
+        branch: `agent/${issue}-fix-login`,
+        worktree,
+        copied: [],
+        missing: [],
+        notes: [],
+        fromIntegration: true,
+      };
     };
   }
 
@@ -996,6 +1022,8 @@ describe("tick: Step 4 and the control files", () => {
       title: hostile,
       branch: "agent/12-fix-login",
       stage: { stage: "plan", mode: "fresh", instance: "inst-1" },
+      // R69: fresh from the integration branch, so its bootstrap keeps the engine's environment.
+      freshWorktree: true,
     });
   });
 

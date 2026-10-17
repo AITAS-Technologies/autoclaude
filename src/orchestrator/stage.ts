@@ -7,9 +7,10 @@
  * into a `StageOutcome` for the decision table. A stage process gets no forge credential
  * (`stageEnv`, applied by the runtime) and this module writes nothing to GitHub.
  *
- * Everything before the spawn runs in the normal environment; only the child gets the
- * scrubbed one. Callers must not hold the ledger lock: the record is written with
- * `updateLedger`, which is not re-entrant.
+ * Everything before the spawn runs in the normal environment except the bootstrap of a
+ * worktree that is not fresh from the integration branch, which executes what a stage wrote
+ * and so runs scrubbed too (R69); the child always gets the scrubbed one. Callers must not
+ * hold the ledger lock: the record is written with `updateLedger`, which is not re-entrant.
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -141,7 +142,10 @@ export async function runStage(
         return stopped(
           `${stage}: git fetch ${cfg.forge.remote} ${cfg.branches.integration} failed (exit ${f.status}): ${tail(f.stderr)}`,
         );
-      const failed = await bootstrapWorktree(cfg, worktree, ctx.now());
+      // The ledger's word, set by whoever made the worktree, never inferred from its content.
+      const failed = await bootstrapWorktree(cfg, worktree, ctx.now(), {
+        env: entry.freshWorktree === true ? "engine" : "stage",
+      });
       if (failed !== null) return stopped(`${stage}: ${failed}`);
     }
 
@@ -243,6 +247,8 @@ export async function runStage(
             startedAt: proc.startedAt,
             processStartedAt,
           };
+          // A stage has run in it now: a later bootstrap here executes what it wrote.
+          delete e.freshWorktree;
           return true;
         },
         ctx.now(),

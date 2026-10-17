@@ -32,8 +32,8 @@ const realDeps: ReviewDeps = { root: repoRoot, context: realContext, review: run
  * on it, through the same pipeline the orchestrator runs. The review reads the pull request's
  * head commit in a worktree: the ledger entry's when it stands at that commit, otherwise a
  * detached one made for the review (the project's `worktrees.copy` files copied in) and
- * removed afterwards. Either way the engine's `bootstrap` has run there, once, with the normal
- * environment.
+ * removed afterwards. Either way the engine's `bootstrap` has run there, once, under the stage
+ * environment: the head is a stage's work, or anyone's (R69).
  *
  * Exit 0 when the review ran to its verdict and the comment is posted (or was already), 2 when
  * the review stopped early (nothing was posted), 1 when it could not run, hit a usage limit or
@@ -103,7 +103,7 @@ export async function reviewVerb(
       for (const m of copyIntoWorktree(root, worktree, cfg).missing)
         io.err(`worktrees.copy: ${m.entry} was not copied: ${m.reason}\n`);
     }
-    const failed = await bootstrapWorktree(cfg, worktree, ctx.now());
+    const failed = await bootstrapWorktree(cfg, worktree, ctx.now(), { env: "stage" });
     if (failed !== null) {
       io.err(`review of #${n}: ${failed}\n`);
       return 1;

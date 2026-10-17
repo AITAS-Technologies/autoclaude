@@ -132,17 +132,47 @@ describe("runStage", () => {
     expect(rt.requests[0]!.cwd).toBe(r.worktree);
   });
 
-  it("bootstraps once per worktree, in the worktree and in the normal environment", async () => {
+  /** The bootstrap writes what it saw of the forge token and the stage marker. */
+  const ENV_PROBE = 'echo "[${GH_TOKEN:-none}|${AUTOCLAUDE_STAGE:-none}]" >> "boot.log"';
+  const withToken = async (body: () => Promise<void>) => {
+    const before = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "engine-token";
+    try {
+      await body();
+    } finally {
+      if (before === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = before;
+    }
+  };
+
+  // R69: a worktree fresh from the integration branch is bootstrapped in the engine's
+  // environment, once; the first stage recorded in it ends that.
+  it("bootstraps a fresh worktree once, in the worktree and in the engine's environment", async () => {
     const r = rig((c) => {
-      c.bootstrap = 'echo "[${GIT_CONFIG_COUNT:-none}]" >> "boot.log"';
+      c.bootstrap = ENV_PROBE;
     });
-    delete process.env.GIT_CONFIG_COUNT;
+    updateLedger(r.root, (l) => void (l.issues["42"]!.freshWorktree = true));
     r.runtime({ report: { file: "plan.md", text: PLAN } });
-    await runStage(r.ctx, entryOf(r), "plan", "fresh");
-    await runStage(r.ctx, entryOf(r), "plan", "fix");
+    await withToken(async () => {
+      await runStage(r.ctx, entryOf(r), "plan", "fresh");
+      await runStage(r.ctx, entryOf(r), "plan", "fix");
+    });
     const log = readFileSync(join(r.worktree, "boot.log"), "utf8").trim().split(/\r?\n/);
-    expect(log).toEqual(["[none]"]);
+    expect(log).toEqual(["[engine-token|none]"]);
     expect(existsSync(join(r.worktree, ".autoclaude", "state", "bootstrapped"))).toBe(true);
+    expect(entryOf(r).freshWorktree, "a stage ran in it: no longer fresh").toBeUndefined();
+  });
+
+  // R69: anything else — recreated from a pushed agent branch, or a stage ran in it — executes
+  // what a stage wrote, so it gets the stage environment: no forge token.
+  it("bootstraps a worktree that is not fresh in the stage environment", async () => {
+    const r = rig((c) => {
+      c.bootstrap = ENV_PROBE;
+    });
+    r.runtime({ report: { file: "plan.md", text: PLAN } });
+    await withToken(() => runStage(r.ctx, entryOf(r), "plan", "fresh").then(() => {}));
+    const log = readFileSync(join(r.worktree, "boot.log"), "utf8").trim().split(/\r?\n/);
+    expect(log).toEqual(["[none|1]"]);
   });
 
   it("records the stage with pid, instance and process start the moment the child exists", async () => {

@@ -1,9 +1,18 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { toPosix } from "../../../src/platform/paths.js";
 import {
   baseFailureIsTheChange,
   redStepExitCode,
@@ -347,5 +356,39 @@ describe("runRedStep", () => {
     expect(r.verdict.kind).toBe("could-not-run");
     expect(r.reason).toMatch(/install/);
     expect(worktreeCount(dir)).toBe(1);
+  }, 90_000);
+
+  // R69: the install and both test runs execute what a stage wrote, so they get the stage
+  // environment (no forge token, the stage marker) and a scratch directory that is gone after.
+  it("runs the install and the tests in the stage environment", async () => {
+    const { dir, worktrees } = repo();
+    const probeDir = realpathSync(mkdtempSync(join(tmpdir(), "autoclaude red-env ")));
+    created.push(probeDir);
+    const probe = `"${toPosix(join(probeDir, "env.txt"))}"`;
+    const line = (what: string) =>
+      `echo "${what} \${GH_TOKEN:-none} \${AUTOCLAUDE_STAGE:-none} \${GH_CONFIG_DIR:-none}" >> ${probe}`;
+    const cfg = config(worktrees, {
+      run: `${line("test")}; ${JUNIT_RUN}`,
+      install: { when: "src/add.js", run: line("install") },
+    });
+    const before = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "engine-token";
+    let r;
+    try {
+      r = await runRedStep(cfg, dir, "base");
+    } finally {
+      if (before === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = before;
+    }
+    expect(r.verdict.kind).toBe("proven");
+    const seen = readFileSync(join(probeDir, "env.txt"), "utf8").trim().split(/\r?\n/);
+    expect(seen.map((l) => l.split(" ").slice(0, 3).join(" "))).toEqual([
+      "install none 1",
+      "test none 1",
+      "test none 1",
+    ]);
+    const scratch = seen[0]!.split(" ").slice(3).join(" ");
+    expect(scratch).not.toBe("none");
+    expect(existsSync(scratch), "the scratch directory is removed afterwards").toBe(false);
   }, 90_000);
 });
