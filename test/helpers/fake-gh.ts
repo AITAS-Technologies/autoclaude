@@ -79,13 +79,55 @@ function flag(args: string[], name: string): string | undefined {
   return i < 0 ? undefined : args[i + 1];
 }
 
-/** Keep only the fields `--json a,b,c` asked for. */
-function pick<T extends object>(value: T, args: string[]): Partial<T> {
+/** The fields `gh issue view|list --json` accepts (gh's documentation). */
+const ISSUE_FIELDS = new Set(
+  "assignees author body closed closedAt comments createdAt id isPinned labels milestone number projectCards projectItems reactionGroups state stateReason title updatedAt url".split(
+    " ",
+  ),
+);
+
+/** The fields `gh pr view|list --json` accepts (gh's documentation). */
+const PR_FIELDS = new Set(
+  "additions assignees author autoMergeRequest baseRefName body changedFiles closed closedAt closingIssuesReferences comments commits createdAt deletions files fullDatabaseId headRefName headRefOid headRepository headRepositoryOwner id isCrossRepository isDraft labels latestReviews maintainerCanModify mergeCommit mergeStateStatus mergeable mergedAt mergedBy milestone number potentialMergeCommit projectCards projectItems reactionGroups reviewDecision reviewRequests reviews state statusCheckRollup title updatedAt url".split(
+    " ",
+  ),
+);
+
+/** A request the fake refuses the way gh does; `serve` turns it into a failed call. */
+class Refused extends Error {}
+
+/**
+ * Keep only the fields `--json a,b,c` asked for. A field gh does not know fails as gh does
+ * ("Unknown JSON field"); a field gh knows and this state cannot answer fails too, so a
+ * request can never be answered with a silent `undefined`.
+ */
+function validFields(args: string[], known: Set<string>): void {
+  for (const f of flag(args, "--json")?.split(",") ?? [])
+    if (!known.has(f)) throw new Refused(`Unknown JSON field: "${f}"`);
+}
+
+function pick(value: object, args: string[], known: Set<string>): Record<string, unknown> {
+  validFields(args, known);
   const fields = flag(args, "--json")?.split(",") ?? [];
   const out: Record<string, unknown> = {};
-  for (const f of fields) out[f] = (value as Record<string, unknown>)[f];
-  return out as Partial<T>;
+  for (const f of fields) {
+    if (!known.has(f)) throw new Refused(`Unknown JSON field: "${f}"`);
+    if (!(f in value)) throw new Refused(`the fake forge cannot answer the JSON field "${f}"`);
+    out[f] = (value as Record<string, unknown>)[f];
+  }
+  return out;
 }
+
+/** Fail on a flag the verb's handler does not interpret (positional arguments are skipped). */
+function allow(rest: string[], flags: string[]): void {
+  for (const a of rest)
+    if (a.startsWith("--") && !flags.includes(a))
+      throw new Refused(`the fake forge does not interpret the flag ${a}`);
+}
+
+/** `--limit n` applied to a listing; gh's default is 30. */
+const limited = <T>(items: T[], rest: string[]): T[] =>
+  items.slice(0, Number(flag(rest, "--limit") ?? 30));
 
 /** The tip of a branch of the bare remote, or null when it is not there. */
 function remoteHead(remote: string, branch: string): string | null {
@@ -155,15 +197,21 @@ export function fakeGh(opts: FakeGhOptions): FakeGh {
     switch (key) {
       case "issue view": {
         const i = issues.get(number);
-        return i ? ok(JSON.stringify(pick(issueOut(i), rest))) : fail(`issue #${number} not found`);
+        return i
+          ? ok(JSON.stringify(pick(issueOut(i), rest, ISSUE_FIELDS)))
+          : fail(`issue #${number} not found`);
       }
       case "issue list": {
+        allow(rest, ["--label", "--state", "--limit", "--json"]);
+        validFields(rest, ISSUE_FIELDS);
         const label = flag(rest, "--label");
         const all = flag(rest, "--state") === "all";
         const hits = [...issues.values()].filter(
           (i) => (label === undefined || i.labels.includes(label)) && (all || i.state === "OPEN"),
         );
-        return ok(JSON.stringify(hits.map((i) => pick(issueOut(i), rest))));
+        return ok(
+          JSON.stringify(limited(hits, rest).map((i) => pick(issueOut(i), rest, ISSUE_FIELDS))),
+        );
       }
       case "issue edit": {
         const i = issues.get(number);
@@ -186,9 +234,11 @@ export function fakeGh(opts: FakeGhOptions): FakeGh {
         return ok();
       }
       case "pr list": {
+        allow(rest, ["--state", "--limit", "--json"]);
+        validFields(rest, PR_FIELDS);
         const all = flag(rest, "--state") === "all";
         const hits = prs.filter((p) => all || p.state === "OPEN");
-        return ok(JSON.stringify(hits.map((p) => pick(prOut(p), rest))));
+        return ok(JSON.stringify(limited(hits, rest).map((p) => pick(prOut(p), rest, PR_FIELDS))));
       }
       case "pr create": {
         const head = flag(rest, "--head") ?? "";
@@ -216,7 +266,7 @@ export function fakeGh(opts: FakeGhOptions): FakeGh {
       case "pr view": {
         const p = prs.find((x) => x.number === number);
         return p
-          ? ok(JSON.stringify(pick(prOut(p), rest)))
+          ? ok(JSON.stringify(pick(prOut(p), rest, PR_FIELDS)))
           : fail(`pull request #${number} not found`);
       }
       case "pr edit": {
@@ -252,7 +302,13 @@ export function fakeGh(opts: FakeGhOptions): FakeGh {
       violations.push(args.join(" "));
       return fail(`gh was called without -R ${opts.repo}: gh ${args.join(" ")}`);
     }
-    return serve(args, o?.input);
+    try {
+      return serve(args, o?.input);
+    } catch (error) {
+      if (!(error instanceof Refused)) throw error;
+      unexpected.push(`${args.join(" ")} (${error.message})`);
+      return fail(error.message);
+    }
   };
 
   return {

@@ -139,6 +139,7 @@ describe("end to end: an issue to a pull request, a fake forge and a fake runtim
     const checkoutBefore = checkout();
 
     const started = Date.now();
+    let dump = () => {};
     try {
       // --- the project: the fixture, a git repository, a bare remote ------------------------
       mkdirSync(root, { recursive: true });
@@ -290,9 +291,23 @@ describe("end to end: an issue to a pull request, a fake forge and a fake runtim
       const readEvents = () => (existsSync(eventsLog) ? readFileSync(eventsLog, "utf8") : "");
       const stateOf = () => loadLedger(root).issues[String(ISSUE)]?.state;
 
+      // On any failure below, not only a stuck loop, the evidence goes to stderr.
+      dump = () =>
+        console.error(
+          `e2e failed in state ${stateOf()}.
+events.log:
+${readEvents()}
+` +
+            `unexpected gh: ${forge.unexpected.join(" | ")}
+scripted failures: ${failures.join(" | ")}
+` +
+            `unscripted roles: ${unscripted.join(" | ")}
+disallowed: ${disallowed.join(" | ")}`,
+        );
+
       // --- the run: tick until the ledger shows pr-open, bounded ---------------------------
       let ticks = 0;
-      try {
+      {
         while (stateOf() !== "pr-open") {
           expect(
             ticks,
@@ -318,12 +333,6 @@ describe("end to end: an issue to a pull request, a fake forge and a fake runtim
             true,
           );
         }
-      } catch (error) {
-        console.error(
-          `e2e failed in state ${stateOf()} after ${ticks} ticks.\nevents.log:\n${readEvents()}\n` +
-            `unexpected gh: ${forge.unexpected.join(" | ")}\nscripted failures: ${failures.join(" | ")}`,
-        );
-        throw error;
       }
 
       // --- the ledger ----------------------------------------------------------------------
@@ -449,6 +458,9 @@ describe("end to end: an issue to a pull request, a fake forge and a fake runtim
       // The red step removed its base worktree.
       expect(git(root, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
       expect(ctx.stages.running()).toEqual([]);
+    } catch (error) {
+      dump();
+      throw error;
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
       Object.assign(process.env, saved);
