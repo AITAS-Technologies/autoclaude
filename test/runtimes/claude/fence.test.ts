@@ -99,18 +99,29 @@ describe("claudeSettings", () => {
   it("keeps state/reports and state/plans writable under forbiddenPaths .autoclaude/**", () => {
     const dir = mkdtempSync(join(tmpdir(), "autoclaude-fence-"));
     tmpDirs.push(dir);
-    for (const d of [".autoclaude/state/reports", ".autoclaude/state/runs", ".autoclaude/extra"])
+    for (const d of [
+      ".autoclaude/state/reports",
+      ".autoclaude/state/plans",
+      ".autoclaude/state/runs",
+      ".autoclaude/extra",
+    ])
       mkdirSync(join(dir, d), { recursive: true });
+    for (const f of [".autoclaude/config.json", ".autoclaude/state/ledger.json"])
+      writeFileSync(join(dir, f), "{}\n");
     const cfg = config((c) => {
       c.forbiddenPaths = [".autoclaude/**"];
     });
     const s = claudeSettings(cfg, dir, BIN) as Settings;
     const rule = claudePathRule(dir);
-    const denied = (rel: string, tool: string): boolean =>
-      s.permissions.deny
+    // Claude Code refuses a path when a deny rule matches the path or any directory above it
+    // ("File is in a directory that is denied"; claude 2.1.301), so every ancestor is checked.
+    const denied = (rel: string, tool: string): boolean => {
+      const globs = s.permissions.deny
         .filter((d) => d.startsWith(`${tool}(${rule}/`))
-        .map((d) => d.slice(`${tool}(${rule}/`.length, -1))
-        .some((glob) => matchesAny(rel, [glob]));
+        .map((d) => d.slice(`${tool}(${rule}/`.length, -1));
+      const parts = rel.split("/");
+      return parts.some((_, i) => matchesAny(parts.slice(0, i + 1).join("/"), globs));
+    };
     for (const tool of ["Edit", "Write"]) {
       expect(denied(".autoclaude/state/reports/plan.md", tool)).toBe(false);
       expect(denied(".autoclaude/state/plans/7.md", tool)).toBe(false);
