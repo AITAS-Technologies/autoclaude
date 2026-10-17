@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyOptions, parsePlanReviewReport } from "../../../src/engine/review/reports.js";
 import { runPlanReview } from "../../../src/orchestrator/review/plan-review.js";
@@ -33,6 +33,12 @@ function setup(script: Scripted) {
   return { r, rt };
 }
 
+async function planReport(r: ReturnType<typeof reviewRig>) {
+  const out = await runPlanReview(r.ctx, r.entry());
+  if (out.kind !== "report") throw new Error("test: expected a report, got a limit");
+  return out;
+}
+
 const parse = (r: ReturnType<typeof reviewRig>, text: string) =>
   parsePlanReviewReport(text, classifyOptions("plan-review", { cfg: r.cfg, projectRoot: r.root }));
 
@@ -60,7 +66,7 @@ describe("runPlanReview", () => {
         };
       throw new Error(role);
     });
-    const { reportFile } = await runPlanReview(r.ctx, r.entry());
+    const { reportFile } = await planReport(r);
     expect(reportFile).toBe(join(r.worktree, ".autoclaude", "state", "reports", "plan-review.md"));
     const text = readFileSync(reportFile, "utf8");
     expect(text.split("\n")[0]).toBe("AUTODEV-PLAN-REVIEW");
@@ -91,7 +97,7 @@ describe("runPlanReview", () => {
 
   it("with nothing found it runs no scorer", async () => {
     const { r, rt } = setup(() => ({ candidates: [], uncertain: [] }));
-    const { reportFile } = await runPlanReview(r.ctx, r.entry());
+    const { reportFile } = await planReport(r);
     const report = parse(r, readFileSync(reportFile, "utf8"));
     expect(report.complete).toBe(true);
     expect(report.findings).toEqual([]);
@@ -100,7 +106,7 @@ describe("runPlanReview", () => {
 
   it("retries the finder once, and a second failure writes a stopped block", async () => {
     const { r, rt } = setup(() => asResult({ exit: "failed" }));
-    const { reportFile } = await runPlanReview(r.ctx, r.entry());
+    const { reportFile } = await planReport(r);
     const text = readFileSync(reportFile, "utf8");
     expect(text.trimEnd().endsWith("PLAN-REVIEW-STATUS: stopped")).toBe(true);
     expect(parse(r, text).complete).toBe(false);
@@ -117,8 +123,40 @@ describe("runPlanReview", () => {
         ? { scores: [{ id: 1, confidence: 9 }] }
         : { scores: idsOf(req).map((id) => ({ id, confidence: 8 })) };
     });
-    const { reportFile } = await runPlanReview(r.ctx, r.entry());
+    const { reportFile } = await planReport(r);
     expect(parse(r, readFileSync(reportFile, "utf8")).findings).toHaveLength(2);
     expect(rt.requests.filter((x) => x.role === "plan-review-scorer")).toHaveLength(2);
+  });
+
+  it("a usage limit in the finder or the scorer is a limit: no report, no retry", async () => {
+    const a = setup(() => asResult({ exit: "limit", limitResetsAt: "2026-03-01T12:00:00.000Z" }));
+    expect(await runPlanReview(a.r.ctx, a.r.entry())).toEqual({
+      kind: "limit",
+      resetsAt: "2026-03-01T12:00:00.000Z",
+    });
+    expect(a.rt.requests).toHaveLength(1);
+    expect(
+      existsSync(join(a.r.worktree, ".autoclaude", "state", "reports", "plan-review.md")),
+    ).toBe(false);
+
+    const b = setup((role) =>
+      role === "plan-review-finder"
+        ? { candidates: [cand("plan/placeholder")], uncertain: [] }
+        : asResult({ exit: "limit", limitResetsAt: "2026-03-01T17:00:00.000Z" }),
+    );
+    expect(await runPlanReview(b.r.ctx, b.r.entry())).toEqual({
+      kind: "limit",
+      resetsAt: "2026-03-01T17:00:00.000Z",
+    });
+    expect(b.rt.requests.filter((x) => x.role === "plan-review-scorer")).toHaveLength(1);
+  });
+
+  it("an issue that cannot be read is a stopped report, not an exception", async () => {
+    const { r } = setup(() => ({ candidates: [], uncertain: [] }));
+    const exec = r.ctx.exec;
+    r.ctx.exec = (cmd, args, o) =>
+      cmd === "gh" ? { status: 1, stdout: "", stderr: "gh: rate limited" } : exec(cmd, args, o);
+    const { reportFile } = await planReport(r);
+    expect(readFileSync(reportFile, "utf8")).toContain("PLAN-REVIEW-STATUS: stopped");
   });
 });

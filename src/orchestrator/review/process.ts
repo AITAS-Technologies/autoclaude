@@ -61,7 +61,12 @@ export interface ProcessSpec {
   schema: object;
 }
 
-export type ProcessOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
+/**
+ * `limit` is a usage limit, not a failure: nobody retries it (the account is still limited)
+ * and it must never be counted as a failed review. `resetsAt` is an ISO time.
+ */
+export type ProcessOutcome<T> =
+  { ok: true; value: T } | { ok: false; reason: string; limit?: { resetsAt: string } };
 
 export async function runReviewProcess<T>(
   ctx: OrchestratorCtx,
@@ -104,6 +109,14 @@ export async function runReviewProcess<T>(
   for (const denial of result.permissionDenials ?? []) {
     ctx.notes(p.issue, `${p.role}: permission denied: ${JSON.stringify(denial).slice(0, 400)}`);
   }
+  if (result.exit === "limit")
+    return {
+      ok: false,
+      reason: `${p.role}: usage limit reached`,
+      limit: {
+        resetsAt: result.limitResetsAt ?? new Date(ctx.now().getTime() + 3_600_000).toISOString(),
+      },
+    };
   if (result.exit !== "ok")
     return {
       ok: false,
@@ -121,11 +134,43 @@ export async function runWithRetry<T>(
   check?: (value: unknown) => string | null,
 ): Promise<ProcessOutcome<T>> {
   const first = await runReviewProcess<T>(ctx, p, check);
-  if (first.ok) return first;
+  if (first.ok || first.limit) return first;
   ctx.notes(p.issue, `${first.reason}; retrying once`);
   const second = await runReviewProcess<T>(ctx, p, check);
   if (!second.ok) ctx.notes(p.issue, `${second.reason}; giving up`);
   return second;
+}
+
+/**
+ * What a review hands back. `report`: the block is written (and posted, for a pull request,
+ * when the review got as far as reading the change); read it with the C2 parsers, and check
+ * `isReportComplete` for a stopped one. `limit`: a runtime hit its usage limit, so nothing was
+ * written or posted and no retry was spent; run the review again after `resetsAt`.
+ */
+export type ReviewOutcome =
+  { kind: "report"; reportFile: string } | { kind: "limit"; resetsAt: string };
+
+export const limitOutcome = (times: string[]): ReviewOutcome => ({
+  kind: "limit",
+  resetsAt: earliest(times),
+});
+
+/** The earliest of several ISO reset times. */
+export const earliest = (times: string[]): string =>
+  times.reduce((a, b) => (new Date(b).getTime() < new Date(a).getTime() ? b : a));
+
+/** The criteria of an issue body: numbered or checkbox items under an "Acceptance criteria" heading. */
+export function issueCriteria(body: string): string[] {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^#{1,6}\s.*acceptance criteria/i.test(l));
+  if (start < 0) return [];
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,6}\s/.test(line)) break;
+    const m = /^\s*(?:\d+[.)]|[-*]\s+\[[ xX]\]|[-*])\s+(.*\S)\s*$/.exec(line);
+    if (m) out.push(m[1]!);
+  }
+  return out;
 }
 
 /** `fn` over `items`, at most `limit` at once; results in item order. */

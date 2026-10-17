@@ -242,9 +242,16 @@ describe("refusals in config.json", () => {
     refuses(edit, /criteria/);
   });
 
+  it("requires the criteria angle: a review without it can never be decided", () => {
+    refuses(
+      (c) => (c.codeReview = { angles: ["bugs", "tests"], scoreThreshold: 7 }),
+      /codeReview\.angles must include "criteria"/,
+    );
+  });
+
   it("refuses a repeated angle and an empty angle list", () => {
     refuses(
-      (c) => (c.codeReview = { angles: ["bugs", "bugs"], scoreThreshold: 7 }),
+      (c) => (c.codeReview = { angles: ["criteria", "criteria"], scoreThreshold: 7 }),
       /repeats an angle/,
     );
     refuses(
@@ -276,7 +283,7 @@ describe("refusals in config.json", () => {
 
   it("refuses thresholds outside 1-10", () => {
     refuses(
-      (c) => (c.codeReview = { angles: ["bugs"], scoreThreshold: 11 }),
+      (c) => (c.codeReview = { angles: ["criteria"], scoreThreshold: 11 }),
       /codeReview\.scoreThreshold must be an integer from 1 to 10/,
     );
     refuses(

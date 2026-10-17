@@ -13,13 +13,20 @@ import type { Dispatch } from "../../prompts/dispatch.js";
 import { prefetchIssue } from "../prefetch.js";
 import type { OrchestratorCtx } from "../stage.js";
 import { assemblePlanReview, type AssembledFinding, type PlanReviewParts } from "./assemble.js";
-import { checkScores, findingsMarkdown, projectFacts, runWithRetry } from "./process.js";
+import {
+  checkScores,
+  findingsMarkdown,
+  limitOutcome,
+  projectFacts,
+  runWithRetry,
+  type ReviewOutcome,
+} from "./process.js";
 import { CandidatesSchema, ScoresSchema, type Candidates, type Scores } from "./schemas.js";
 
 export async function runPlanReview(
   ctx: OrchestratorCtx,
   entry: LedgerEntry,
-): Promise<{ reportFile: string }> {
+): Promise<ReviewOutcome> {
   const { cfg, root } = ctx;
   const issue = entry.issue;
   const worktree = entry.worktree;
@@ -28,13 +35,13 @@ export async function runPlanReview(
   const planFile = join(worktree, ".autoclaude", "state", "plans", `${issue}.md`);
   const integrationRef = `${cfg.forge.remote}/${cfg.branches.integration}`;
 
-  const write = (parts: PlanReviewParts): { reportFile: string } => {
+  const write = (parts: PlanReviewParts): ReviewOutcome => {
     mkdirSync(dirname(reportFile), { recursive: true });
     writeFileSync(reportFile, assemblePlanReview(parts));
     ctx.notes(issue, `plan review report written (${parts.status})`);
-    return { reportFile };
+    return { kind: "report", reportFile };
   };
-  const stopped = (why: string, uncertain: string[] = []): { reportFile: string } => {
+  const stopped = (why: string, uncertain: string[] = []): ReviewOutcome => {
     ctx.notes(issue, `plan review stopped: ${why}`);
     return write({
       issue,
@@ -55,8 +62,14 @@ export async function runPlanReview(
   const classify = classifyOptions("plan-review", { cfg, projectRoot: root });
   const threshold = classify.threshold ?? 7;
   const evidenceKind = new Map(classify.catalogue.map((r) => [r.id, r.evidence]));
+  let issueView: Dispatch["issue"];
+  try {
+    issueView = prefetchIssue(ctx.forge, issue);
+  } catch (error) {
+    return stopped(`the issue could not be read: ${String(error).replace(/\s+/g, " ")}`);
+  }
   const base: Dispatch = {
-    issue: prefetchIssue(ctx.forge, issue),
+    issue: issueView,
     mode: "fresh",
     worktree,
     integrationRef,
@@ -76,7 +89,7 @@ export async function runPlanReview(
     spec: cfg.stages.planReview,
     schema: CandidatesSchema,
   });
-  if (!found.ok) return stopped(found.reason);
+  if (!found.ok) return found.limit ? limitOutcome([found.limit.resetsAt]) : stopped(found.reason);
 
   const kept = found.value.candidates.filter(
     (c) => evidenceKind.get(c.rule) === "measurement" || normaliseEvidence(c.evidence) !== "",
@@ -110,6 +123,7 @@ export async function runPlanReview(
     },
     checkScores(numbered.map((c) => c.id)),
   );
+  if (!scored.ok && scored.limit) return limitOutcome([scored.limit.resetsAt]);
   if (!scored.ok)
     return stopped(
       scored.reason,

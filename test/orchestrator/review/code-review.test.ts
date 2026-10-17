@@ -64,12 +64,22 @@ function setup(over: Record<string, Answer> = {}, rigOpts: RigOptions = {}, dela
   return { r, rt };
 }
 
+async function reviewOutcome(
+  r: ReviewRig,
+  deps: Parameters<typeof runCodeReview>[3] = red("proven"),
+  target: Parameters<typeof runCodeReview>[2] = { kind: "worktree" },
+) {
+  return runCodeReview(r.ctx, r.entry(), target, deps);
+}
+
 async function review(
   r: ReviewRig,
   deps: Parameters<typeof runCodeReview>[3] = red("proven"),
   target: Parameters<typeof runCodeReview>[2] = { kind: "worktree" },
 ) {
-  const { reportFile } = await runCodeReview(r.ctx, r.entry(), target, deps);
+  const out = await reviewOutcome(r, deps, target);
+  if (out.kind !== "report") throw new Error("test: expected a report, got a limit");
+  const { reportFile } = out;
   const text = readFileSync(reportFile, "utf8");
   return {
     reportFile,
@@ -237,7 +247,7 @@ describe("runCodeReview", () => {
     const recheck = rt.requests.find((x) => x.role === "code-review-recheck-2")!;
     expect(recheck.req.readOnly).toBe(true);
     const md = dispatchOf(recheck.req).findingsMarkdown!;
-    expect(md).toContain("Second criterion text");
+    expect(md).toContain("Second");
     expect(md).not.toMatch(/\b5\b/); // the scorer's number is deliberately not given
   });
 
@@ -423,13 +433,14 @@ describe("runCodeReview", () => {
     expect(posted[0]).toContain(r.cfg.messages.footer);
   });
 
-  it("a worktree at another commit than the pull request's head is a stopped review, not a wrong one", async () => {
+  it("a worktree at another commit than the pull request's head is a stopped result for the caller, never posted", async () => {
     const posted: string[] = [];
     const { r, rt } = setup({}, { pr: 7, head: "1111111", posted });
     const { text } = await review(r, red("proven"), { kind: "pr", pr: 7, headSha: "deadbeefcafe" });
     expect(text.trimEnd().endsWith("CODE-REVIEW-STATUS: stopped")).toBe(true);
     expect(rt.requests).toHaveLength(0);
-    expect(posted[0]).toContain("The review did not finish");
+    // never under the head's marker: that would silence the real review of this commit
+    expect(posted).toHaveLength(0);
   });
 
   it("posts nothing for a worktree target", async () => {
@@ -450,5 +461,185 @@ describe("runCodeReview", () => {
     expect(text).toContain("CODE-REVIEW-STATUS: stopped");
     expect(text).toContain("no network");
     expect(rt.requests).toHaveLength(0);
+  });
+
+  it("a usage limit pauses the review: no report, no post, no retry, no new process, earliest reset", async () => {
+    const posted: string[] = [];
+    const { r, rt } = setup(
+      {
+        "code-review-angle-bugs": () =>
+          asResult({ exit: "limit", limitResetsAt: "2026-03-01T15:00:00.000Z" }),
+        "code-review-angle-tests": () =>
+          asResult({ exit: "limit", limitResetsAt: "2026-03-01T13:00:00.000Z" }),
+      },
+      {
+        pr: 7,
+        head: "deadbeefcafe",
+        posted,
+        edit: (c) => {
+          c.stages.codeReview.parallel = 3;
+          c.codeReview.angles = ["criteria", "bugs", "tests"];
+        },
+      },
+      10,
+    );
+    const out = await reviewOutcome(r, red("proven"), {
+      kind: "pr",
+      pr: 7,
+      headSha: "deadbeefcafe",
+    });
+    expect(out).toEqual({ kind: "limit", resetsAt: "2026-03-01T13:00:00.000Z" });
+    expect(posted).toHaveLength(0);
+    expect(existsSync(join(r.worktree, ".autoclaude", "state", "reports", "code-review.md"))).toBe(
+      false,
+    );
+    for (const angle of ["bugs", "tests"])
+      expect(rt.requests.filter((x) => x.role === `code-review-angle-${angle}`)).toHaveLength(1);
+    expect(rt.requests.some((x) => x.role === "code-review-scorer")).toBe(false);
+  });
+
+  it("a usage limit in the scorer, or in a re-check, is a limit and not a stopped review", async () => {
+    const a = setup({
+      "code-review-angle-bugs": () => ({ candidates: [cand("bug/boundary")], uncertain: [] }),
+      "code-review-scorer": () =>
+        asResult({ exit: "limit", limitResetsAt: "2026-03-01T14:00:00.000Z" }),
+    });
+    expect(await reviewOutcome(a.r)).toEqual({
+      kind: "limit",
+      resetsAt: "2026-03-01T14:00:00.000Z",
+    });
+    expect(a.rt.requests.filter((x) => x.role === "code-review-scorer")).toHaveLength(1);
+
+    const b = setup({
+      "code-review-angle-criteria": () => ({
+        candidates: [
+          cand("spec/criterion-not-met", {
+            file: "",
+            line: null,
+            evidence: "Second",
+            message: "n",
+          }),
+        ],
+        uncertain: [],
+        criteria: [three[0], { n: 2, met: false, where: "none" }, three[2]],
+      }),
+      "code-review-scorer": (req) => ({ scores: idsOf(req).map((id) => ({ id, confidence: 4 })) }),
+      "code-review-recheck-2": () =>
+        asResult({ exit: "limit", limitResetsAt: "2026-03-01T16:00:00.000Z" }),
+    });
+    expect(await reviewOutcome(b.r)).toEqual({
+      kind: "limit",
+      resetsAt: "2026-03-01T16:00:00.000Z",
+    });
+    expect(b.rt.requests.filter((x) => x.role === "code-review-recheck-2")).toHaveLength(1);
+  });
+
+  it("pairs a criterion finding with its criterion by the text it quotes, not by position", async () => {
+    const { r, rt } = setup({
+      "code-review-angle-criteria": () => ({
+        // the third criterion's finding only; the second criterion has none of its own
+        candidates: [
+          cand("spec/criterion-not-met", {
+            file: "",
+            line: null,
+            evidence: "Third",
+            message: "third unmet",
+          }),
+        ],
+        uncertain: [],
+        criteria: [
+          three[0],
+          { n: 2, met: false, where: "none" },
+          { n: 3, met: false, where: "none" },
+        ],
+      }),
+      "code-review-scorer": (req) => ({ scores: idsOf(req).map((id) => ({ id, confidence: 4 })) }),
+      "code-review-recheck-2": () => ({ met: false, where: "no file" }),
+      "code-review-recheck-3": () => ({ met: true, where: "src/c.ts:4" }),
+    });
+    const report = (await review(r)).parse();
+    // criterion 3 was re-checked on its own text and found met; criterion 2 stands
+    expect(report.criteria.map((c) => c.met)).toEqual([true, false, true]);
+    const f = report.findings.filter((x) => x.rule === "spec/criterion-not-met");
+    expect(f).toHaveLength(1);
+    // the finding the engine filed itself quotes the criterion's text, not "criterion 2"
+    expect(f[0]!.evidence).toBe("Second");
+    expect(f[0]!.message).not.toContain("third unmet");
+    const md = (n: number) =>
+      dispatchOf(rt.requests.find((x) => x.role === `code-review-recheck-${n}`)!.req)
+        .findingsMarkdown!;
+    expect(md(3)).toContain("Third");
+    expect(md(2)).toContain("Second");
+  });
+
+  it("a re-check that fails keeps the finding and leaves the review complete", async () => {
+    const { r, rt } = setup({
+      "code-review-angle-criteria": () => ({
+        candidates: [
+          cand("spec/criterion-not-met", {
+            file: "",
+            line: null,
+            evidence: "Second",
+            message: "n",
+          }),
+        ],
+        uncertain: [],
+        criteria: [three[0], { n: 2, met: false, where: "none" }, three[2]],
+      }),
+      "code-review-scorer": (req) => ({ scores: idsOf(req).map((id) => ({ id, confidence: 5 })) }),
+      "code-review-recheck-2": () => asResult({ exit: "failed" }),
+    });
+    const report = (await review(r)).parse();
+    expect(report.complete).toBe(true);
+    const f = report.findings.find((x) => x.rule === "spec/criterion-not-met")!;
+    expect(f.tier).toBe("must");
+    expect(f.confidence).toBe(9);
+    expect(rt.requests.filter((x) => x.role === "code-review-recheck-2")).toHaveLength(2);
+  });
+
+  it("a criteria reading with no criterion is invalid, retried, then the review is stopped", async () => {
+    const { r, rt } = setup({
+      "code-review-angle-criteria": () => ({ candidates: [], uncertain: [], criteria: [] }),
+    });
+    const { text } = await review(r);
+    expect(text.trimEnd().endsWith("CODE-REVIEW-STATUS: stopped")).toBe(true);
+    expect(text).not.toContain("criteria: none");
+    expect(rt.requests.filter((x) => x.role === "code-review-angle-criteria")).toHaveLength(2);
+  });
+
+  it("an issue that cannot be read is a stopped report with the reason, not an exception, and is not posted", async () => {
+    const posted: string[] = [];
+    const { r, rt } = setup({}, { pr: 7, head: "deadbeefcafe", posted });
+    const exec = r.ctx.exec;
+    r.ctx.exec = (cmd, args, o) =>
+      cmd === "gh" && args.includes("issue")
+        ? { status: 1, stdout: "", stderr: "gh: rate limited" }
+        : exec(cmd, args, o);
+    const out = await reviewOutcome(r, red("proven"), {
+      kind: "pr",
+      pr: 7,
+      headSha: "deadbeefcafe",
+    });
+    expect(out.kind).toBe("report");
+    const text = readFileSync((out as { reportFile: string }).reportFile, "utf8");
+    expect(text).toContain("CODE-REVIEW-STATUS: stopped");
+    expect(text).toContain("rate limited");
+    expect(rt.requests).toHaveLength(0);
+    expect(posted).toHaveLength(0);
+  });
+
+  it("after a usage limit no further process is started", async () => {
+    const { r, rt } = setup(
+      { "code-review-angle-criteria": () => asResult({ exit: "limit" }) },
+      {
+        edit: (c) => {
+          c.stages.codeReview.parallel = 1;
+          c.codeReview.angles = ["criteria", "bugs", "tests"];
+        },
+      },
+    );
+    const out = await reviewOutcome(r);
+    expect(out.kind).toBe("limit");
+    expect(rt.requests.map((x) => x.role)).toEqual(["code-review-angle-criteria"]);
   });
 });

@@ -88,7 +88,7 @@ export function reviewRig(opts: RigOptions = {}): ReviewRig {
   const ctx: OrchestratorCtx = {
     root,
     cfg,
-    forge: new Forge("acme/widgets", exec),
+    forge: new Forge("acme/widgets", (cmd, args, o) => ctx.exec(cmd, args, o)),
     exec,
     instance: "inst-1",
     now: () => new Date("2026-03-01T10:00:00Z"),

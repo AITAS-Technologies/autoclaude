@@ -36,6 +36,9 @@ import type { OrchestratorCtx } from "../stage.js";
 import { assembleCodeReview, type AssembledFinding, type CodeReviewParts } from "./assemble.js";
 import {
   checkScores,
+  issueCriteria,
+  limitOutcome,
+  type ReviewOutcome,
   findingsMarkdown,
   pool,
   projectFacts,
@@ -71,6 +74,12 @@ interface Cand extends Candidate {
   criterion?: number;
 }
 
+/** The criteria reading must list the issue's criteria: an empty list would leave nothing to decide on. */
+const needsCriteria = (v: unknown): string | null =>
+  (v as Candidates).criteria && (v as Candidates).criteria!.length > 0
+    ? null
+    : "the criteria reading must list at least one acceptance criterion";
+
 const CRITERION_RULE = "spec/criterion-not-met";
 
 const asFinding = (c: Candidate, over: Partial<Candidate> = {}): AssembledFinding => ({
@@ -91,7 +100,7 @@ export async function runCodeReview(
   entry: LedgerEntry,
   target: ReviewTarget,
   deps: CodeReviewDeps = {},
-): Promise<{ reportFile: string }> {
+): Promise<ReviewOutcome> {
   const { cfg, root } = ctx;
   const issue = entry.issue;
   const worktree = entry.worktree;
@@ -100,12 +109,12 @@ export async function runCodeReview(
   const integrationRef = `${cfg.forge.remote}/${cfg.branches.integration}`;
   const head = target.kind === "pr" ? target.headSha : "HEAD";
 
-  const write = (parts: CodeReviewParts): { reportFile: string } => {
+  const write = (parts: CodeReviewParts, post = true): ReviewOutcome => {
     const text = assembleCodeReview(parts);
     mkdirSync(dirname(reportFile), { recursive: true });
     writeFileSync(reportFile, text);
     ctx.notes(issue, `code review report written (${parts.status})`);
-    if (target.kind === "pr") {
+    if (target.kind === "pr" && post) {
       const posted = postReview(target.pr, text, target.headSha, ctx.exec, {
         cfg,
         root,
@@ -115,21 +124,26 @@ export async function runCodeReview(
       if (posted.code !== 0) throw new Error(`code review: post-review failed: ${posted.message}`);
       ctx.notes(issue, posted.message);
     }
-    return { reportFile };
+    return { kind: "report", reportFile };
   };
-  const stoppedEarly = (why: string): { reportFile: string } => {
+  // Before the change was read: written for the caller, never posted under the PR head's marker,
+  // which would silence the real review of this commit.
+  const stoppedEarly = (why: string): ReviewOutcome => {
     ctx.notes(issue, `code review stopped: ${why}`);
-    return write({
-      issue,
-      redStep: null,
-      reason: "",
-      fanOut: [],
-      scoredBy: "",
-      criteria: [],
-      findings: [],
-      uncertain: [`review — not run: ${why}`],
-      status: "stopped",
-    });
+    return write(
+      {
+        issue,
+        redStep: null,
+        reason: "",
+        fanOut: [],
+        scoredBy: "",
+        criteria: [],
+        findings: [],
+        uncertain: [`review — not run: ${why}`],
+        status: "stopped",
+      },
+      false,
+    );
   };
 
   // Step 0: the engine fetches; a stage never does.
@@ -227,7 +241,12 @@ export async function runCodeReview(
 
   // Step 1: the fan-out.
   const angles = cfg.codeReview.angles;
-  const issueView = prefetchIssue(ctx.forge, issue);
+  let issueView: Dispatch["issue"];
+  try {
+    issueView = prefetchIssue(ctx.forge, issue);
+  } catch (error) {
+    return stoppedEarly(`the issue could not be read: ${String(error).replace(/\s+/g, " ")}`);
+  }
   const base: Dispatch = {
     issue: issueView,
     mode: "fresh",
@@ -254,25 +273,36 @@ export async function runCodeReview(
     | { angle: CodeReviewAngle; kind: "failed"; reason: string }
     | { angle: CodeReviewAngle; kind: "skipped" };
   let abort = false;
+  const limits: string[] = [];
   const results = await pool<CodeReviewAngle, AngleResult>(
     angles,
     cfg.stages.codeReview.parallel,
     async (angle) => {
       if (abort) return { angle, kind: "skipped" };
-      const out = await runWithRetry<Candidates>(ctx, {
-        ...procBase(),
-        role: `code-review-angle-${angle}`,
-        promptName: `code-review/angles/${angle}`,
-        promptVars: { ...vars, angle },
-        dispatch: angle === "prior-prs" ? { ...base, priorPullRequests: prior ?? [] } : base,
-        spec: cfg.stages.codeReview.angles[angle] ?? cfg.stages.codeReview.angles.default,
-        schema: CandidatesSchema,
-      });
+      const out = await runWithRetry<Candidates>(
+        ctx,
+        {
+          ...procBase(),
+          role: `code-review-angle-${angle}`,
+          promptName: `code-review/angles/${angle}`,
+          promptVars: { ...vars, angle },
+          dispatch: angle === "prior-prs" ? { ...base, priorPullRequests: prior ?? [] } : base,
+          spec: cfg.stages.codeReview.angles[angle] ?? cfg.stages.codeReview.angles.default,
+          schema: CandidatesSchema,
+        },
+        angle === "criteria" ? needsCriteria : undefined,
+      );
       if (out.ok) return { angle, kind: "ok", value: out.value };
       abort = true;
+      if (out.limit) {
+        limits.push(out.limit.resetsAt);
+        return { angle, kind: "skipped" };
+      }
       return { angle, kind: "failed", reason: out.reason };
     },
   );
+  // A usage limit is not a failed review: nothing is written or posted, no retry is spent.
+  if (limits.length > 0) return limitOutcome(limits);
   const returned = results.filter((r) => r.kind === "ok");
   const fanOut = returned.map((r) => r.angle);
   const failures = results.flatMap((r) => (r.kind === "failed" ? [r.reason] : []));
@@ -280,38 +310,53 @@ export async function runCodeReview(
   // Criteria, from the criteria angle only.
   const criteriaResult = returned.find((r) => r.angle === "criteria");
   const criteriaList = [...(criteriaResult?.value.criteria ?? [])].sort((a, b) => a.n - b.n);
-  const criteriaCands: Candidate[] = [];
   const candidates: Cand[] = [...mechanical];
-  for (const r of returned) {
-    uncertain.push(...r.value.uncertain);
-    for (const c of r.value.candidates) {
-      if (
-        r.angle === "criteria" &&
-        c.rule === CRITERION_RULE &&
-        criteriaCands.length < criteriaList.filter((k) => !k.met).length
-      )
-        criteriaCands.push(c);
-      else candidates.push({ ...c, origin: "angle" });
+  // The issue's own criteria, by position: the angle numbers them in the issue's order.
+  const issueTexts = issueCriteria(issueView.body);
+  const textOf = (n: number): string => issueTexts[n - 1] ?? `Criterion ${n}`;
+  const norm = (t: string): string => normaliseEvidence(t).toLowerCase();
+  const unmet = criteriaList.filter((c) => !c.met);
+  const claimed = new Set<Candidate>();
+  const criterionCands = new Map<number, Candidate>();
+  // A candidate belongs to a criterion when its evidence quotes that criterion's text.
+  for (const c of unmet) {
+    const text = norm(textOf(c.n));
+    const own = (criteriaResult?.value.candidates ?? []).find((k) => {
+      const e = norm(k.evidence);
+      return (
+        k.rule === CRITERION_RULE &&
+        !claimed.has(k) &&
+        e !== "" &&
+        (e.includes(text) || text.includes(e))
+      );
+    });
+    if (own) {
+      claimed.add(own);
+      criterionCands.set(c.n, own);
     }
   }
+  for (const r of returned) {
+    uncertain.push(...r.value.uncertain);
+    for (const c of r.value.candidates)
+      if (!claimed.has(c)) candidates.push({ ...c, origin: "angle" });
+  }
   // One finding per unmet criterion: the angle's own, or one the engine files from the list.
-  criteriaList
-    .filter((c) => !c.met)
-    .forEach((c, i) => {
-      const own = criteriaCands[i];
-      candidates.push({
-        origin: "criterion",
-        criterion: c.n,
-        ...(own ?? {
-          rule: CRITERION_RULE,
-          confidence: 9,
-          file: "",
-          line: null,
-          evidence: `criterion ${c.n}`,
-          message: `No evidence in the diff for criterion ${c.n}: ${c.where}`,
-        }),
-      });
+  // The criterion's text is the evidence either way: it tells two such findings apart.
+  for (const c of unmet) {
+    const own = criterionCands.get(c.n);
+    candidates.push({
+      origin: "criterion",
+      criterion: c.n,
+      ...(own ?? {
+        rule: CRITERION_RULE,
+        confidence: 9,
+        file: "",
+        line: null,
+        message: `No evidence in the diff for criterion ${c.n}: ${c.where}`,
+      }),
+      evidence: textOf(c.n),
     });
+  }
 
   // Step 6: quote or drop; a measurement rule has no line to quote.
   const quoted = (c: Cand): boolean =>
@@ -322,7 +367,7 @@ export async function runCodeReview(
 
   const notScored = (why: string): string[] =>
     kept.map((c) => `${c.rule} — not scored (${why})${where(c)}: ${c.message}`);
-  const finishStopped = (why: string, scored = false): { reportFile: string } =>
+  const finishStopped = (why: string, scored = false): ReviewOutcome =>
     write({
       issue,
       redStep: verdict,
@@ -355,7 +400,8 @@ export async function runCodeReview(
       },
       checkScores(numbered.map((c) => c.id)),
     );
-    if (!scored.ok) return finishStopped(scored.reason);
+    if (!scored.ok)
+      return scored.limit ? limitOutcome([scored.limit.resetsAt]) : finishStopped(scored.reason);
     for (const s of scored.value.scores) scoreOf.set(s.id, s.confidence);
     const below = numbered.filter((c) => scoreOf.get(c.id)! < threshold).length;
     ctx.notes(issue, `scorer returned candidates=${numbered.length} below-threshold=${below}`);
@@ -363,7 +409,6 @@ export async function runCodeReview(
 
   // Step 6a: reconcile the measurements the scorer put at or below the threshold.
   const criteria = criteriaList.map(({ met, where: w }) => ({ met, where: w }));
-  const recheckFailures: string[] = [];
   type Settled = { finding?: AssembledFinding; uncertain?: string };
   const reconcile = async (c: (typeof numbered)[number]): Promise<Settled> => {
     const score = scoreOf.get(c.id)!;
@@ -377,6 +422,7 @@ export async function runCodeReview(
     if (c.origin === "red") return stands();
     if (c.origin === "criterion") {
       const n = c.criterion!;
+      if (limits.length > 0) return {};
       const out = await runWithRetry<Recheck>(ctx, {
         ...procBase(),
         role: `code-review-recheck-${n}`,
@@ -392,7 +438,10 @@ export async function runCodeReview(
         schema: RecheckSchema,
       });
       if (!out.ok) {
-        recheckFailures.push(out.reason);
+        // No evidence found is what a re-check that never answered amounts to: the
+        // measurement stands (source Step 6a), and the review is not made worse for it.
+        if (out.limit) limits.push(out.limit.resetsAt);
+        else ctx.notes(issue, `${out.reason}; the measurement stands`);
         return stands("; the re-check did not finish");
       }
       if (!out.value.met) return stands("; the re-check found no evidence either");
@@ -412,27 +461,19 @@ export async function runCodeReview(
   };
   // Re-checks are processes: they share the cap with everything else. The rest is bookkeeping.
   const settled = await pool(numbered, cfg.stages.codeReview.parallel, reconcile);
+  if (limits.length > 0) return limitOutcome(limits);
   const findings = settled.flatMap((x) => (x.finding ? [x.finding] : []));
   uncertain.push(...settled.flatMap((x) => (x.uncertain ? [x.uncertain] : [])));
 
-  let criteriaOut: CodeReviewParts["criteria"] = criteria;
-  if (criteria.length === 0) {
-    criteriaOut = "none";
-    uncertain.push(
-      criteriaResult
-        ? "criteria — the issue lists no acceptance criterion the criteria reading could check"
-        : "criteria — the criteria reading did not run, so no acceptance criterion was checked",
-    );
-  }
   return write({
     issue,
     redStep: verdict,
     reason: redReason,
     fanOut,
     scoredBy,
-    criteria: criteriaOut,
+    criteria,
     findings,
     uncertain,
-    status: recheckFailures.length > 0 ? "stopped" : "complete",
+    status: "complete",
   });
 }

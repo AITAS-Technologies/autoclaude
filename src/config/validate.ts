@@ -299,6 +299,10 @@ function validateCodeReview(c: Check, v: unknown): ProjectConfig["codeReview"] {
       throw c.fail(
         `codeReview.angles has an unknown angle ${show(a)}; known are ${CODE_REVIEW_ANGLES.join(", ")}`,
       );
+  if (!raw.includes("criteria"))
+    throw c.fail(
+      'codeReview.angles must include "criteria": the review states a verdict on every acceptance criterion, and a review without that reading cannot be decided',
+    );
   if (new Set(raw).size !== raw.length)
     throw c.fail(`codeReview.angles repeats an angle: ${show(raw)}`);
   return {
