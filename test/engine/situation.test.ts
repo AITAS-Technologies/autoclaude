@@ -31,7 +31,14 @@ import {
   transition,
 } from "../../src/engine/ledger/ledger.js";
 import type { ProjectConfig } from "../../src/config/types.js";
-import type { Forge, IssueSummary, IssueView, PrSummary } from "../../src/forge/github.js";
+import { claimBody } from "../../src/engine/claims.js";
+import { machineId } from "../../src/engine/ledger/ledger.js";
+import {
+  Forge,
+  type IssueSummary,
+  type IssueView,
+  type PrSummary,
+} from "../../src/forge/github.js";
 import type { Exec } from "../../src/forge/exec.js";
 
 const cfg = {
@@ -411,6 +418,7 @@ describe("computeSituation", () => {
     ({
       listIssues: (label: string) => (label === "agent-working" ? working : ready),
       listPrs: () => prs,
+      listPrsOnBranch: (branch: string) => prs.filter((p) => p.headRefName === branch),
     }) as unknown as Forge;
   const execFor =
     (root: string): Exec =>
@@ -528,5 +536,109 @@ describe("computeSituation", () => {
       readOnly: true,
     });
     expect(s.newWork.claimedThisWindow).toBe(1);
+  });
+
+  /**
+   * R71: a listing of every pull request ever opened is refused at 1,000, and an established
+   * repository has more than that. Open ones are one listing; ended ones are asked about by
+   * exact head branch, for the branches in flight only.
+   */
+  describe("against a pull request history longer than one listing", () => {
+    const claimedAt = "2026-09-01T00:00:00Z";
+    const merged: PrSummary = {
+      number: 70,
+      state: "MERGED",
+      headRefName: "agent/7-x",
+      updatedAt: "2026-09-09T11:00:00Z",
+      closedAt: "2026-09-09T11:00:00Z",
+      mergedAt: "2026-09-09T11:00:00Z",
+      url: "",
+    };
+    const history: PrSummary[] = Array.from({ length: 1500 }, (_, i) => ({
+      number: 1000 + i,
+      state: i % 2 ? "MERGED" : "CLOSED",
+      headRefName: `feature/${i}`,
+      updatedAt: "2026-01-01T00:00:00Z",
+      closedAt: "2026-01-01T00:00:00Z",
+      mergedAt: null,
+      url: "",
+    }));
+
+    const flagOf = (args: string[], name: string) => {
+      const i = args.indexOf(name);
+      return i < 0 ? undefined : args[i + 1];
+    };
+
+    /** gh answering the real flags: `--head` exact, `--state`, `--limit` applied. */
+    function project() {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "situation-history-")));
+      roots.push(root);
+      const ledger = emptyLedger(machineId());
+      transition(ledger, 7, "pr-open", { title: "t", branch: "agent/7-x", worktree: "", pr: 70 });
+      saveLedger(root, ledger, now);
+      const working: IssueView = {
+        ...iss(7, ["agent-working"]),
+        comments: [
+          {
+            author: { login: "me" },
+            body: claimBody(machineId(), claimedAt),
+            createdAt: claimedAt,
+          },
+        ],
+      };
+      const prs = [...history, merged];
+      const calls: string[][] = [];
+      const flag = flagOf;
+      const exec: Exec = (cmd, args) => {
+        calls.push([cmd, ...args]);
+        if (cmd === "git") return { status: 0, stdout: `worktree ${root}\nHEAD abc\n`, stderr: "" };
+        const json = (v: unknown) => ({ status: 0, stdout: JSON.stringify(v), stderr: "" });
+        if (args.includes("issue"))
+          return json(flag(args, "--label") === "agent-working" ? [working] : []);
+        const head = flag(args, "--head");
+        const state = flag(args, "--state");
+        const hits = prs.filter(
+          (p) =>
+            (head === undefined || p.headRefName === head) &&
+            (state === "all" || p.state === state?.toUpperCase()),
+        );
+        return json(hits.slice(0, Number(flag(args, "--limit") ?? 30)));
+      };
+      return { root, exec, calls };
+    }
+
+    it("still ticks: no listing of every state is asked for", () => {
+      const p = project();
+      const s = computeSituation(p.root, fullCfg, {
+        forge: new Forge("o/r", p.exec),
+        exec: p.exec,
+        now,
+        liveInstance: null,
+        readOnly: true,
+      });
+      expect(s.issues.map((i) => i.issue)).toEqual([7]);
+      const lists = p.calls.filter((c) => c.includes("pr") && c.includes("list"));
+      const heads = lists.filter((c) => c.includes("--head"));
+      // The open listing once; every other question names one branch in flight.
+      expect(lists.filter((c) => !c.includes("--head")).map((c) => flagOf(c, "--state"))).toEqual([
+        "open",
+      ]);
+      expect(heads.map((c) => flagOf(c, "--head")).sort()).toEqual(["agent/7-t7", "agent/7-x"]);
+    });
+
+    it("still sees a merged pull request of a ledger entry's branch", () => {
+      const p = project();
+      const s = computeSituation(p.root, fullCfg, {
+        forge: new Forge("o/r", p.exec),
+        exec: p.exec,
+        now,
+        liveInstance: null,
+        readOnly: true,
+      });
+      expect(s.issues.find((i) => i.issue === 7)).toMatchObject({
+        state: "merged",
+        prState: "MERGED",
+      });
+    });
   });
 });

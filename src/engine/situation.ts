@@ -300,7 +300,7 @@ export interface SituationDeps {
 }
 
 /**
- * Everything one tick needs. Reconciles the ledger from the forge's complete listings
+ * Everything one tick needs. Reconciles the ledger from the forge's facts (`gatherFacts`)
  * and, unless `readOnly`, saves it under the ledger lock so a `ledger set` from another
  * process cannot interleave. The transitions the reconcile made by itself go into the
  * issues' events logs before the save renders `status.md` from them: they are the ones
@@ -308,10 +308,11 @@ export interface SituationDeps {
  */
 export function computeSituation(root: string, cfg: ProjectConfig, deps: SituationDeps): Situation {
   const { forge, exec, now, liveInstance, readOnly } = deps;
-  // Only the working query needs the comments, for the claim markers; the queue does not.
-  const { working, prs } = gatherFacts(forge, cfg);
-  const ready = forge.listIssues(cfg.queue.ready, "open", { comments: false });
   const worktrees = listWorktrees(root, exec).map((w) => w.path);
+  // Only the working query needs the comments, for the claim markers; the queue does not. The
+  // ledger as it stands names the branches whose ended pull requests are asked about.
+  const { working, prs } = gatherFacts(forge, cfg, { ledger: loadLedger(root), worktrees });
+  const ready = forge.listIssues(cfg.queue.ready, "open", { comments: false });
   const reconciled = (base: Ledger) =>
     reconcile({ ...base, instance: liveInstance }, { working, prs }, worktrees, cfg, now);
   const ledger = readOnly

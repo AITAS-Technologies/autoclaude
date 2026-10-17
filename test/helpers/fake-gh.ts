@@ -234,10 +234,16 @@ export function fakeGh(opts: FakeGhOptions): FakeGh {
         return ok();
       }
       case "pr list": {
-        allow(rest, ["--state", "--limit", "--json"]);
+        allow(rest, ["--state", "--head", "--limit", "--json"]);
         validFields(rest, PR_FIELDS);
-        const all = flag(rest, "--state") === "all";
-        const hits = prs.filter((p) => all || p.state === "OPEN");
+        // The two states the engine asks for (gh's default is open); `--head` is an exact match.
+        const state = flag(rest, "--state") ?? "open";
+        if (state !== "open" && state !== "all")
+          throw new Refused(`the fake forge does not interpret --state ${state}`);
+        const head = flag(rest, "--head");
+        const hits = prs.filter(
+          (p) => (state === "all" || p.state === "OPEN") && (head === undefined || p.head === head),
+        );
         return ok(JSON.stringify(limited(hits, rest).map((p) => pick(prOut(p), rest, PR_FIELDS))));
       }
       case "pr create": {

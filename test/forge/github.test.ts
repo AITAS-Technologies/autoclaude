@@ -205,6 +205,27 @@ describe("complete listings", () => {
     const forge = new Forge(REPO, f.exec);
     expect(() => forge.listIssues("l", "open")).toThrow(/more than 1000/);
     expect(() => forge.listPrs("open")).toThrow(/more than 1000/);
+    expect(() => forge.listPrsOnBranch("agent/1-x")).toThrow(/more than 1000/);
+  });
+
+  // R71: ended pull requests are asked about by exact head branch, never listed whole.
+  it("asks for one branch's pull requests of every state by exact head, and recent ones bounded", () => {
+    const f = fake({ "-R o/r pr list": items(3) });
+    const forge = new Forge(REPO, f.exec);
+    expect(forge.listPrsOnBranch("agent/1-x")).toHaveLength(3);
+    expect(f.calls[0]!.slice(4, 10)).toEqual([
+      "list",
+      "--head",
+      "agent/1-x",
+      "--state",
+      "all",
+      "--limit",
+    ]);
+    const bounded = fake({ "-R o/r pr list": items(200) });
+    expect(new Forge(REPO, bounded.exec).recentPrs(200)).toHaveLength(200);
+    const argv = bounded.calls[0]!;
+    expect(argv[argv.indexOf("--limit") + 1]).toBe("200");
+    expect(argv).not.toContain("--head");
   });
 });
 

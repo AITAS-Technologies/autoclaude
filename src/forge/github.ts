@@ -133,6 +133,8 @@ export interface PrSummary {
   url: string;
 }
 
+const PR_SUMMARY_FIELDS = "number,state,headRefName,updatedAt,closedAt,mergedAt,url";
+
 /** One workflow run as `gh run list` reports it. */
 export interface RunSummary {
   databaseId: number;
@@ -322,7 +324,12 @@ export class Forge {
     ]);
   }
 
-  listPrs(state: "open" | "all"): PrSummary[] {
+  /**
+   * Every open pull request, as one complete listing. Only the open ones: a listing of every
+   * state grows with the repository's history and is refused at 1,000, which an established
+   * repository passes (R71). Closed and merged ones are asked about by branch.
+   */
+  listPrs(state: "open"): PrSummary[] {
     return complete(
       this.json<PrSummary[]>([
         "pr",
@@ -332,10 +339,50 @@ export class Forge {
         "--limit",
         String(LIST_LIMIT),
         "--json",
-        "number,state,headRefName,updatedAt,closedAt,mergedAt,url",
+        PR_SUMMARY_FIELDS,
       ]),
       "gh pr list",
     );
+  }
+
+  /**
+   * Every pull request, in any state, whose head is exactly `branch` (`--head` is an exact
+   * match): the per-branch question that replaced a listing of the whole history, so the cost
+   * follows the branches in flight, not the repository's age.
+   */
+  listPrsOnBranch(branch: string): PrSummary[] {
+    return complete(
+      this.json<PrSummary[]>([
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--limit",
+        String(LIST_LIMIT),
+        "--json",
+        PR_SUMMARY_FIELDS,
+      ]),
+      `gh pr list --head ${branch}`,
+    );
+  }
+
+  /**
+   * The newest `limit` pull requests in any state, newest first. A bounded read on purpose, like
+   * `listRuns`: its reader wants recent history, never a complete list.
+   */
+  recentPrs(limit: number): PrSummary[] {
+    return this.json<PrSummary[]>([
+      "pr",
+      "list",
+      "--state",
+      "all",
+      "--limit",
+      String(limit),
+      "--json",
+      PR_SUMMARY_FIELDS,
+    ]);
   }
 
   createPr(opts: { base: string; head: string; title: string; body: string }): {

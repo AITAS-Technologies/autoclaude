@@ -31,6 +31,7 @@ import { branchPrefixFor, notIssueBranch, worktreeDirPrefix } from "../branch-na
 import { instantInZone, wallClockIn } from "../profile.js";
 import { reportPath, type Stage } from "../review/reports.js";
 import { escapeRegExp } from "../review/rules.js";
+import { slugify } from "../worktree.js";
 import { RETRY_CODES, STATE_DIR, sleepSync, withLedgerLock } from "./lock.js";
 
 export { withLedgerLock, withLedgerLockAsync } from "./lock.js";
@@ -148,19 +149,64 @@ const PRUNE_DAYS = 7;
 export interface GitHubFacts {
   /** Every issue carrying the working label, open or closed, with its comments. */
   working: IssueSummary[];
-  /** Every pull request, open or not, so a merged one can be recognised. */
+  /**
+   * Every open pull request, and every pull request of the branches the tick has to know about
+   * (`branchesToAsk`), so a merged or closed one of an issue in flight is recognised.
+   */
   prs: PrSummary[];
 }
 
 const MAX_EVENTS = 300;
 
 /**
- * The facts `reconcile` needs, through the forge's complete listings (a truncated list
- * is refused there, never reconciled from): every issue carrying the working label,
- * open or closed, with its comments, and every pull request.
+ * The head branches whose closed and merged pull requests reconcile and the situation read
+ * (R71). For every issue carrying the working label: the ledger entry's branch, the one its
+ * worktree's directory names, and the one its current title gives (what a claim on it pushes;
+ * a claim of another machine has no other). For every ledger entry still in flight, or with a
+ * worktree on disk: its branch. A finished entry with neither is not asked about.
  */
-export function gatherFacts(forge: Forge, cfg: Pick<ProjectConfig, "labels">): GitHubFacts {
-  return { working: forge.listIssues(cfg.labels.working, "all"), prs: forge.listPrs("all") };
+export function branchesToAsk(
+  ledger: Pick<Ledger, "issues">,
+  working: IssueSummary[],
+  worktrees: string[],
+  cfg: ProjectConfig,
+): string[] {
+  const out = new Set<string>();
+  const add = (branch: string | undefined) => {
+    if (branch) out.add(branch);
+  };
+  for (const iss of working) {
+    add(ledger.issues[String(iss.number)]?.branch);
+    const wt = worktreeFor(iss.number, worktrees, cfg);
+    if (wt) add(`${cfg.branchPrefix}${basename(wt).slice(worktreeDirPrefix(cfg).length)}`);
+    add(`${branchPrefixFor(iss.number, cfg)}${slugify(iss.title)}`);
+  }
+  // By directory name: one per issue, and the same spelling whichever path led to it.
+  const dirOf = (path: string) => basename(path).toLowerCase();
+  const onDisk = new Set(worktrees.map(dirOf));
+  for (const e of Object.values(ledger.issues))
+    if (!TERMINAL.has(e.state) || (e.worktree && onDisk.has(dirOf(e.worktree)))) add(e.branch);
+  return [...out].sort();
+}
+
+/**
+ * The facts `reconcile` needs: every issue carrying the working label, open or closed, with
+ * its comments, through the forge's complete listing; every open pull request, likewise; and
+ * the pull requests of each branch `branchesToAsk` names, one exact-head query per branch. A
+ * truncated list is refused, never reconciled from. The cost of a tick follows the branches in
+ * flight, never the repository's history: a listing of every pull request ever opened is
+ * refused at 1,000, and an established repository passes that (R71).
+ */
+export function gatherFacts(
+  forge: Forge,
+  cfg: ProjectConfig,
+  known: { ledger: Pick<Ledger, "issues">; worktrees: string[] },
+): GitHubFacts {
+  const working = forge.listIssues(cfg.labels.working, "all");
+  const prs = new Map(forge.listPrs("open").map((p) => [p.number, p]));
+  for (const branch of branchesToAsk(known.ledger, working, known.worktrees, cfg))
+    for (const p of forge.listPrsOnBranch(branch)) if (!prs.has(p.number)) prs.set(p.number, p);
+  return { working, prs: [...prs.values()] };
 }
 
 export function machineId(): string {

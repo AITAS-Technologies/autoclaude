@@ -28,8 +28,8 @@ const MAX_PRS_VIEWED = 200;
 /**
  * Merged and closed pull requests that touched any of `files`, newest first, at most `limit`,
  * each with its discussion (`<author>: <text>` per conversation comment and non-empty review).
- * The list comes from the complete `listPrs("all")`; the files of each candidate are read one
- * pull request at a time, newest first, until `limit` have matched.
+ * The candidates are the newest pull requests of any state, a bounded read (`recentPrs`); the
+ * files of each are read one pull request at a time, newest first, until `limit` have matched.
  */
 export function prefetchPriorPrs(
   forge: Forge,
@@ -41,7 +41,7 @@ export function prefetchPriorPrs(
   const when = (p: { closedAt?: string | null; mergedAt?: string | null; updatedAt: string }) =>
     p.mergedAt ?? p.closedAt ?? p.updatedAt;
   const ended = forge
-    .listPrs("all")
+    .recentPrs(MAX_PRS_VIEWED)
     .filter((p) => p.state !== "OPEN")
     .sort((a, b) => (when(a) < when(b) ? 1 : when(a) > when(b) ? -1 : b.number - a.number))
     .slice(0, MAX_PRS_VIEWED);

@@ -16,6 +16,7 @@ import { join, resolve } from "node:path";
 import {
   activeClaims,
   appendTransitions,
+  branchesToAsk,
   emptyLedger,
   flag,
   gatherFacts,
@@ -203,19 +204,58 @@ describe("transition", () => {
   });
 });
 
+// R71: open pull requests are one complete listing; ended ones are asked about per branch in
+// flight, so a tick's cost never grows with the repository's history.
 describe("gatherFacts", () => {
-  it("asks the forge for the working label across all states, and for every pull request", () => {
+  const pr = (number: number, headRefName: string, state: "OPEN" | "MERGED" | "CLOSED") => ({
+    number,
+    state,
+    headRefName,
+    updatedAt: "",
+    url: "",
+  });
+
+  it("lists the working label across all states, the open pull requests, and each branch to ask about", () => {
     const calls: unknown[][] = [];
     const forge = {
       listIssues: (...a: unknown[]) => (calls.push(["issues", ...a]), [issue(1, [], [])]),
-      listPrs: (...a: unknown[]) => (calls.push(["prs", ...a]), []),
+      listPrs: (...a: unknown[]) => (calls.push(["prs", ...a]), [pr(5, "agent/1-x", "OPEN")]),
+      listPrsOnBranch: (b: string) => (
+        calls.push(["branch", b]),
+        b === "agent/1-x" ? [pr(5, "agent/1-x", "OPEN"), pr(3, "agent/1-x", "MERGED")] : []
+      ),
     } as unknown as Forge;
-    const facts = gatherFacts(forge, cfg);
+    const ledger = emptyLedger("me");
+    transition(ledger, 1, "pr-open", { title: "t", branch: "agent/1-x", worktree: "" });
+    const facts = gatherFacts(forge, cfg, { ledger, worktrees: [] });
     expect(calls).toEqual([
       ["issues", "agent-working", "all"],
-      ["prs", "all"],
+      ["prs", "open"],
+      ["branch", "agent/1-issue-1"],
+      ["branch", "agent/1-x"],
     ]);
     expect(facts.working).toHaveLength(1);
+    expect(facts.prs.map((p) => p.number).sort()).toEqual([3, 5]);
+  });
+});
+
+describe("branchesToAsk", () => {
+  it("names a working issue's ledger, worktree and title branches, and the in-flight entries'", () => {
+    const ledger = emptyLedger("me");
+    transition(ledger, 1, "implementing", { title: "t", branch: "agent/1-old", worktree: "" });
+    transition(ledger, 2, "pr-open", { title: "t", branch: "agent/2-y", worktree: "" });
+    // Finished, but its worktree is still on disk: the cleanup reads its pull request.
+    transition(ledger, 3, "blocked", { title: "t", branch: "agent/3-z", worktree: "/w/agent+3-z" });
+    // Finished and gone: nothing to ask.
+    transition(ledger, 4, "done", { title: "t", branch: "agent/4-q", worktree: "/w/agent+4-q" });
+    const working = [issue(1, ["agent-working"], [])];
+    expect(branchesToAsk(ledger, working, ["/w/agent+1-wt", "/w/agent+3-z"], cfg)).toEqual([
+      "agent/1-issue-1",
+      "agent/1-old",
+      "agent/1-wt",
+      "agent/2-y",
+      "agent/3-z",
+    ]);
   });
 });
 

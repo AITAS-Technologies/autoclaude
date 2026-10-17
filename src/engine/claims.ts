@@ -18,6 +18,7 @@ import type { Forge, IssueSummary, PrSummary } from "../forge/github.js";
 import { branchPrefixFor } from "./branch-names.js";
 import { activeClaims, claimIsStale, type Claim } from "./ledger/ledger.js";
 import { defuseMentions } from "./review/reports.js";
+import { slugify } from "./worktree.js";
 
 export type ClaimBlockerCode = "closed" | "not-ready" | "assigned" | "working";
 
@@ -58,6 +59,19 @@ export function freshAttemptLabels(current: string[], cfg: ProjectConfig): strin
 function prsOf(issue: number, prs: PrSummary[], cfg: ProjectConfig): PrSummary[] {
   const prefix = branchPrefixFor(issue, cfg);
   return prs.filter((p) => p.headRefName.startsWith(prefix));
+}
+
+/**
+ * What the staleness rule reads for one issue: its open pull requests, from the complete open
+ * listing, and every pull request of the branch its title gives, the one a claim on it pushes.
+ * Not a listing of every pull request ever opened, which an established repository has more of
+ * than one listing returns (R71).
+ */
+function prsOfIssue(forge: Forge, issue: number, title: string, cfg: ProjectConfig): PrSummary[] {
+  const prs = new Map(prsOf(issue, forge.listPrs("open"), cfg).map((p) => [p.number, p]));
+  for (const p of forge.listPrsOnBranch(`${branchPrefixFor(issue, cfg)}${slugify(title)}`))
+    if (!prs.has(p.number)) prs.set(p.number, p);
+  return [...prs.values()];
 }
 
 export function claimBody(machine: string, at: string): string {
@@ -157,7 +171,7 @@ export function claimIssue(
   let staleOnes: Claim[] = [];
   // Listed once per command: nothing between the two reads can change what the rule
   // reads.
-  const prs = opts.takeover ? forge.listPrs("all") : [];
+  const prs = opts.takeover ? prsOfIssue(forge, issue, before.title, cfg) : [];
   if (opts.takeover) {
     const claims = activeClaims(before.comments);
     const live = claims.find((c) => !isStale(c, prs));
