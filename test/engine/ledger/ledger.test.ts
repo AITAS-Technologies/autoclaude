@@ -175,6 +175,32 @@ describe("transition", () => {
     );
     expect(transition(l, 1, "implementing", {}, now).stage).toBeNull();
   });
+
+  it("clears a limit's marker on a state change that does not name it, keeps it within the state", () => {
+    const l = emptyLedger("me");
+    transition(l, 1, "planning", { title: "t", branch: "agent/1-t", worktree: "w" }, now);
+    transition(l, 1, "planning", { limitedStage: "plan" }, now);
+    expect(transition(l, 1, "planning", { note: "same state" }, now).limitedStage).toBe("plan");
+    expect(transition(l, 1, "closed", {}, now).limitedStage).toBeNull();
+    // A transition that names it sets it, whatever the state.
+    expect(transition(l, 1, "fixing-ci", { limitedStage: "implement" }, now).limitedStage).toBe(
+      "implement",
+    );
+  });
+
+  it("no rebuild by reconcile revives an old attempt's interrupted stage", () => {
+    const before = emptyLedger("me");
+    transition(before, 9, "planning", { title: "t", branch: "agent/9-t", worktree: "w", limitedStage: "plan" }, now); // prettier-ignore
+    // A human closes the issue under the paused stage; the reconcile moves the entry on.
+    const l = reconcile(
+      before,
+      { working: [issue(9, ["agent-working"], [claimComment("me", hoursAgo(1))], "CLOSED")], prs: [] }, // prettier-ignore
+      [],
+      cfg,
+      now,
+    );
+    expect(l.issues["9"]).toMatchObject({ state: "closed", limitedStage: null });
+  });
 });
 
 describe("gatherFacts", () => {

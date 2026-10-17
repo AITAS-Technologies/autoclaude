@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProjectConfig, StageSpec } from "../config/types.js";
+import { branchPrefixFor } from "../engine/branch-names.js";
 import { claimIssue, releaseIssue } from "../engine/claims.js";
 import {
   appendNoteBestEffort,
@@ -30,7 +31,12 @@ import { presentText, publish } from "../engine/publish.js";
 import { reviewDecision } from "../engine/review/decision.js";
 import { reportPath, type Stage } from "../engine/review/reports.js";
 import { computeSituation, PR_STATES, type Situation } from "../engine/situation.js";
-import { createWorktree, removeWorktree } from "../engine/worktree.js";
+import {
+  createWorktree,
+  findWorktree,
+  remoteIssueBranches,
+  removeWorktree,
+} from "../engine/worktree.js";
 import type { RuntimeAdapter, StageResult } from "../runtimes/types.js";
 import { runCodeReview } from "./review/code-review.js";
 import { runPlanReview } from "./review/plan-review.js";
@@ -485,9 +491,15 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
     case "stop-stage":
       await ctx.stages.stop(issue);
       return [];
-    case "remove-worktree":
+    case "remove-worktree": {
+      const kept = a.keepUnpushed ? unpushedWork(ctx, issue) : null;
+      if (kept !== null) {
+        ctx.notes(issue, kept);
+        return [kept];
+      }
       d.removeWorktree(root, issue, cfg, { deleteRemote: a.remote }, exec);
       return [];
+    }
     case "comment":
       commentOn(ctx, issue, a.body);
       return [];
@@ -512,6 +524,20 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
       return [`worktree ${made.worktree}`];
     }
   }
+}
+
+/**
+ * Why an entry's worktree must stay although its work was pushed once: its HEAD is not the
+ * head the ledger recorded as pushed (a fix round's reviewed commits, say), or no pushed head
+ * is known to compare with. Null when the worktree may go.
+ */
+function unpushedWork(ctx: TickCtx, issue: number): string | null {
+  const entry = loadLedger(ctx.root).issues[String(issue)];
+  if (!entry?.worktree || !existsSync(entry.worktree)) return null;
+  const r = ctx.exec("git", ["rev-parse", "HEAD"], { cwd: entry.worktree });
+  const head = r.status === 0 ? r.stdout.trim() : "";
+  if (entry.pushedSha !== null && head === entry.pushedSha) return null;
+  return `the worktree is kept: its HEAD ${head || "(unreadable)"} is not the pushed head ${entry.pushedSha ?? "(none recorded)"}; \`autoclaude rollback ${issue}\` clears it when the work is not wanted`;
 }
 
 /** One line per action for the tick summary. */
@@ -593,6 +619,41 @@ export async function execute(
 // --- Step 4: claiming new work -----------------------------------------------------------
 
 /**
+ * Why claiming this issue would walk into a failure it cannot get out of, or null: a worktree
+ * of the issue with no ledger entry (`createWorktree` refuses it), or the issue's branch still
+ * on the remote with no open pull request (the new attempt's first push is refused, because the
+ * remote head is one its worktree never had). Neither is cleared automatically, because either
+ * may hold the only copy of someone's work; `autoclaude rollback <issue>` clears both.
+ *
+ * Throws when the remote cannot be asked: a claim made blind is the failure this prevents.
+ */
+function leftoverOf(ctx: TickCtx, n: number): { reason: string } | { openPr: number } | null {
+  const { root, cfg, exec } = ctx;
+  const found: string[] = [];
+  const known = loadLedger(root).issues[String(n)] !== undefined;
+  const worktree = known ? null : findWorktree(root, n, cfg, exec);
+  if (worktree) found.push(`a worktree at ${worktree.path} that no ledger entry names`);
+  const remote = remoteIssueBranches(root, n, cfg, exec);
+  if (remote.length > 0) {
+    // An open pull request on the branch is an attempt in flight, tracked by its entry (the
+    // queue leaves such an issue out already); it is not a leftover, and not new work either.
+    const prefix = branchPrefixFor(n, cfg);
+    const open = ctx.forge
+      .listPrs("open")
+      .find((p) => p.state === "OPEN" && p.headRefName.startsWith(prefix));
+    if (open) return { openPr: open.number };
+    found.push(`the branch ${remote.join(", ")} on ${cfg.forge.remote} with no open pull request`);
+  }
+  if (found.length === 0) return null;
+  return {
+    reason:
+      `a new attempt would fail on what an earlier one left: ${found.join(", and ")}. ` +
+      `Run \`autoclaude rollback ${n}\` to clear it (\`--keep-branch-as <name>\` keeps the work), ` +
+      `then re-apply ${cfg.queue.ready} — if wrong, a claimable issue waits for a human`,
+  };
+}
+
+/**
  * Claim one issue, create its worktree and dispatch its plan. The title is GitHub-controlled
  * text and reaches `createWorktree` as one argument, never a command line.
  */
@@ -605,6 +666,23 @@ export async function takeIssue(
   const { root, cfg } = ctx;
   const n = item.number;
   const deps = { forge: ctx.forge, cfg, machine: machineId(), now: ctx.now() };
+  // Before the claim: a claim that can only end in a refused push or a refused worktree is
+  // not taken. The issue is released blocked at once, with the remedy.
+  const leftover = leftoverOf(ctx, n);
+  if (leftover && "openPr" in leftover) {
+    return {
+      won: false,
+      lines: [`pull request #${leftover.openPr} is open on its branch: not new work`],
+    };
+  }
+  if (leftover) {
+    releaseIssue(n, "blocked", leftover.reason, deps);
+    ctx.notes(n, `not claimed: ${foldNote(leftover.reason)}`);
+    return {
+      won: false,
+      lines: ["not claimed: an earlier attempt's leftovers", "released to blocked"],
+    };
+  }
   const claim = claimIssue(n, { takeover: false }, deps);
   if (!claim.won) {
     return {

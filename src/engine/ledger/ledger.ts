@@ -326,6 +326,9 @@ export function transition(
   };
   // A state change ends the running stage unless the patch names the next one.
   if (before && before.state !== to && fields.stage === undefined) entry.stage = null;
+  // And the limit's interruption with it: a stage marked in one state is not resumed in another,
+  // so no rebuild or later transition revives an old attempt's stage.
+  if (before && before.state !== to && fields.limitedStage === undefined) entry.limitedStage = null;
   ledger.issues[key] = entry;
   ledger.events.push({
     at: now.toISOString(),

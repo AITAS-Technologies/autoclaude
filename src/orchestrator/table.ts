@@ -67,7 +67,12 @@ export type Action =
   | { kind: "limit"; until: string }
   | { kind: "note"; text: string }
   | { kind: "stop-stage" }
-  | { kind: "remove-worktree"; remote: boolean }
+  | {
+      kind: "remove-worktree";
+      remote: boolean;
+      /** Keep the worktree when its HEAD is not the pushed head: it holds the only copy. */
+      keepUnpushed?: boolean;
+    }
   | { kind: "comment"; body: string }
   | { kind: "recreate-worktree" };
 
@@ -762,7 +767,10 @@ export function newWork(situation: Situation, _cfg: ProjectConfig): { issue: num
  * says: a `blocked` transition would send the entry through the cleanup, whose remote-branch
  * deletion closes an open pull request. The stage record, when there is one, is ended in place
  * (R51: the consuming path clears it), and the entry, its label gone, is dropped by the next
- * reconcile.
+ * reconcile — so nothing would remove its worktree later. When something was pushed the
+ * worktree goes now, its remote branch kept; the executor still keeps it when its HEAD is not
+ * the pushed head. When nothing was pushed it stays: it holds the only copy of the work, and a
+ * later claim refuses it with `autoclaude rollback <issue>` as the remedy.
  */
 export function onActionFailed(
   entry: TableEntry,
@@ -770,9 +778,11 @@ export function onActionFailed(
   failure: { message: string; rebaseConflict?: boolean },
 ): Action[] | null {
   const why = failure.message.replace(/\s+/g, " ").trim().slice(0, 400);
+  const pushed = entry.pr !== null || entry.pushedSha !== null;
   const releaseOnly = (reason: string): Action[] => [
     { kind: "release", to: "blocked", reason },
     ...(entry.stage ? [{ kind: "set", state: entry.state, stage: "none" } as const] : []),
+    ...(pushed ? [{ kind: "remove-worktree", remote: false, keepUnpushed: true } as const] : []),
   ];
   switch (action.kind) {
     case "label":

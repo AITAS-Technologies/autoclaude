@@ -43,6 +43,7 @@ import {
 } from "../../src/forge/github.js";
 import {
   StageRegistry,
+  takeIssue,
   triageIssue,
   type EngineDeps,
   type TickCtx,
@@ -200,6 +201,8 @@ function rig(opts: { instance?: string } = {}) {
   const underLock: Call[] = [];
   const prComments: Array<{ pr: number; body: string }> = [];
   const fail = { addLabel: "" };
+  /** What `git rev-parse HEAD` answers in a worktree, and what `ls-remote --heads` lists. */
+  const git = { head: "abc1234", remoteBranches: [] as string[] };
   const lockDir = join(root, ".autoclaude", "state", "ledger.lock");
   const flagOf = (args: string[], name: string) => {
     const i = args.indexOf(name);
@@ -213,6 +216,12 @@ function rig(opts: { instance?: string } = {}) {
     if (cmd === "git") {
       if (args.includes("worktree") && args.includes("list"))
         return ok(worktrees.map((w) => `worktree ${w}\nHEAD abc\n\n`).join(""));
+      if (args.includes("rev-parse") && args.at(-1) === "HEAD") return ok(`${git.head}\n`);
+      if (args.includes("ls-remote")) {
+        const prefix = args.at(-1)!.replace(/\*$/, "");
+        const heads = git.remoteBranches.filter((b) => b.startsWith(prefix));
+        return ok(heads.map((b) => `0123abc\trefs/heads/${b}\n`).join(""));
+      }
       // `worktree remove --force <path>` and `worktree add <path> -b <branch> <base>`, so the
       // engine's own create and remove can run against this list.
       const at = args.indexOf("worktree");
@@ -348,6 +357,7 @@ function rig(opts: { instance?: string } = {}) {
     now: () => clock,
     entry: (n: number) => loadLedger(root).issues[String(n)],
     worktrees,
+    git,
     comments: (n: number) => (issues.get(n)?.comments ?? []).map((c) => c.body),
     /** A ledger entry of this machine's, its worktree on disk and registered, its issue claimed. */
     seed(
@@ -700,6 +710,27 @@ describe("tick: Step 2 settles finished stages", () => {
     expect(r.comments(42).filter((b) => b.includes("autodev-release"))).toHaveLength(1);
   });
 
+  it("a failed label edit after a push removes the worktree when its HEAD is the pushed head, and keeps it otherwise", async () => {
+    for (const [head, removed] of [
+      ["abc1234", true],
+      ["def5678", false],
+    ] as const) {
+      const r = rig();
+      const worktree = r.seed(42, "resume-needed", { pr: 7, pushedSha: "abc1234" });
+      r.git.head = head;
+      r.seams.runCodeReview.impl = async () => ({ kind: "report", reportFile: writeReport(worktree, "code-review", "x") }); // prettier-ignore
+      r.seams.reviewDecision.impl = () => ({ code: 0, decision: decision("retry", { label: "agent-retry-1" }), message: "" }); // prettier-ignore
+      r.fail.addLabel = "agent-retry-1";
+      await tick(r.ctx);
+      await flush();
+      await tick(r.ctx);
+      // The pull request keeps its remote branch either way.
+      expect(r.seams.removeWorktree.calls.map((c) => [c[1], c[3]]), head).toEqual(removed ? [[42, { deleteRemote: false }]] : []); // prettier-ignore
+      if (!removed)
+        expect(r.notes.some((n) => n.includes("the worktree is kept") && n.includes("autoclaude rollback 42"))).toBe(true); // prettier-ignore
+    }
+  });
+
   it("a label that cannot be applied releases blocked quoting the edit, and nothing is dispatched", async () => {
     const r = rig();
     const worktree = r.seed(42, "resume-needed");
@@ -719,6 +750,8 @@ describe("tick: Step 2 settles finished stages", () => {
     expect(r.seams.runCodeReview.calls, "no re-dispatch after the failed edit").toHaveLength(1);
     expect(r.entry(42)).toMatchObject({ state: "code-reviewing", stage: null });
     expect(r.issues.get(42)!.labels.map((l) => l.name)).toContain("agent-blocked");
+    // Nothing was pushed: the worktree holds the only copy of the work and stays.
+    expect(r.seams.removeWorktree.calls).toEqual([]);
     expect(r.comments(42).some((b) => b.includes("agent-retry-1") && b.includes("HTTP 502"))).toBe(true); // prettier-ignore
     // The report the retry would have replaced is still where the decision read it.
     expect(existsSync(join(worktree, ".autoclaude", "state", "reports", "code-review.md"))).toBe(true); // prettier-ignore
@@ -886,8 +919,17 @@ describe("tick: Step 3 pull requests", () => {
     expect(summary.changed.join(" ")).toContain("pull request #7 is still open");
   });
 
-  it("gates red at the cap remove the worktree, so the issue can be claimed again later", async () => {
+  /**
+   * What this proves: gates red at the cap leave no worktree and no local branch behind (the
+   * engine's own `removeWorktree` against the fake git), a re-queued issue whose branch is still
+   * on the remote is refused before any claim with the rollback remedy, and once nothing is left
+   * over the claim creates a fresh worktree (the engine's `createWorktree`) and dispatches plan.
+   * It does not drive the new attempt to a publish: the stages and publish are seams here, and
+   * publish's refusal to force over a remote head is the very state the refusal keeps it out of.
+   */
+  it("gates red at the cap remove the worktree; the issue is claimed again once nothing is left over", async () => {
     const r = prRig({ attempts: { implement: 1, fix: 2, reviewRetry: 0, plan: 0 } });
+    r.git.remoteBranches.push("agent/42-issue-42");
     r.seams.removeWorktree.impl = removeWorktree;
     r.seams.createWorktree.impl = createWorktree;
     prOf(r, [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]);
@@ -903,6 +945,15 @@ describe("tick: Step 3 pull requests", () => {
     r.prs[0]!.closedAt = r.now().toISOString();
     r.issues.get(42)!.labels.push({ name: "agent-ready" });
     r.seams.runStage.impl = () => new Promise(() => {});
+    r.advance(5);
+    // The branch is still on the remote: claiming would end in a refused push.
+    await tick(r.ctx);
+    expect(r.seams.runStage.calls).toEqual([]);
+    expect(r.comments(42).some((b) => b.includes("autodev-release") && b.includes("autoclaude rollback 42"))).toBe(true); // prettier-ignore
+    expect(r.issues.get(42)!.labels.map((l) => l.name)).not.toContain("agent-working");
+    // A human clears it (`autoclaude rollback 42`) and puts the issue back in the queue.
+    r.git.remoteBranches.length = 0;
+    r.issues.get(42)!.labels.push({ name: "agent-ready" });
     r.advance(5);
     const again = await tick(r.ctx);
     expect(again.changed.join(" ")).not.toMatch(/could not be created|already has a worktree/);
@@ -946,6 +997,53 @@ describe("tick: Step 4 and the control files", () => {
       branch: "agent/12-fix-login",
       stage: { stage: "plan", mode: "fresh", instance: "inst-1" },
     });
+  });
+
+  it("a leftover worktree with no ledger entry: released blocked with the rollback remedy, nothing run", async () => {
+    const r = rig();
+    r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));
+    r.worktrees.push(join(r.root, ".autoclaude", "worktrees", "agent+12-old-try").replaceAll("\\", "/")); // prettier-ignore
+    created(r);
+    await tick(r.ctx);
+    expect(r.seams.createWorktree.calls).toEqual([]);
+    expect(r.seams.runStage.calls).toEqual([]);
+    expect(r.comments(12).some((b) => b.includes("autodev-claim"))).toBe(false);
+    const release = r.comments(12).find((b) => b.includes("autodev-release")) ?? "";
+    expect(release).toContain("agent+12-old-try");
+    expect(release).toContain("autoclaude rollback 12");
+    expect(r.issues.get(12)!.labels.map((l) => l.name)).toContain("agent-blocked");
+    expect(r.entry(12)).toBeUndefined();
+  });
+
+  it("the issue's branch left on the remote with no open pull request: released blocked, nothing run", async () => {
+    const r = rig();
+    r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));
+    r.git.remoteBranches.push("agent/12-old-try", "agent/120-other-issue");
+    created(r);
+    await tick(r.ctx);
+    expect(r.seams.createWorktree.calls).toEqual([]);
+    expect(r.seams.runStage.calls).toEqual([]);
+    const release = r.comments(12).find((b) => b.includes("autodev-release")) ?? "";
+    expect(release).toContain("agent/12-old-try");
+    expect(release).not.toContain("agent/120-other-issue");
+    expect(release).toContain("autoclaude rollback 12");
+  });
+
+  it("a remote branch with an open pull request is an attempt in flight: never queued, and never claimed", async () => {
+    const r = rig();
+    r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));
+    r.git.remoteBranches.push("agent/12-fix-login");
+    r.prs.push({ number: 7, state: "OPEN", headRefName: "agent/12-fix-login", updatedAt: r.now().toISOString(), url: "u" }); // prettier-ignore
+    created(r);
+    const summary = await tick(r.ctx);
+    // The queue leaves it out (its pull request is open), so nothing is claimed or released.
+    expect(summary.waiting.some((w) => w.includes("queue empty"))).toBe(true);
+    expect(r.comments(12)).toEqual([]);
+    // And should it reach the claim anyway (a race with the listing), it is not taken.
+    const taken = await takeIssue(r.ctx, { number: 12, title: "Issue 12" }, false);
+    expect(taken).toEqual({ won: false, lines: ["pull request #7 is open on its branch: not new work"] }); // prettier-ignore
+    expect(r.comments(12)).toEqual([]);
+    expect(r.seams.createWorktree.calls).toEqual([]);
   });
 
   it("a lost claim moves on to the next issue in the queue", async () => {

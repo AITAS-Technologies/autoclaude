@@ -926,9 +926,28 @@ describe("a failed action releases blocked quoting it", () => {
       { kind: "release", to: "blocked", reason: expect.stringMatching(/agent-retry-1.*gh: HTTP 502/) }, // prettier-ignore
       { kind: "set", state: "code-reviewing", stage: "none" },
     ]);
-    // A CI fix round's label has no stage to end: the release is all.
-    const ci = onActionFailed(entry({ state: "pr-open", stage: null }), { kind: "label", add: "agent-fix-1" }, { message: "x" }); // prettier-ignore
-    expect(kinds(ci ?? [])).toEqual(["release"]);
+    // A CI fix round's label has no stage to end; its work is on the remote, so the worktree
+    // goes (the executor keeps it when its HEAD is not the pushed head) and the PR keeps its branch.
+    const ci = onActionFailed(entry({ state: "pr-open", stage: null, pr: 7, pushedSha: "abc1234" }), { kind: "label", add: "agent-fix-1" }, { message: "x" }); // prettier-ignore
+    expect(ci).toEqual([
+      { kind: "release", to: "blocked", reason: expect.any(String) },
+      { kind: "remove-worktree", remote: false, keepUnpushed: true },
+    ]);
+  });
+
+  it("nothing pushed — the worktree stays: it holds the only copy of the work", () => {
+    for (const action of [
+      { kind: "label", add: "agent-retry-1" },
+      { kind: "publish", update: false },
+    ] as const) {
+      // prettier-ignore
+      const actions = onActionFailed(entry({ pr: null, pushedSha: null }), action, { message: "x" }); // prettier-ignore
+      expect(ofKind(actions ?? [], "remove-worktree"), action.kind).toEqual([]);
+    }
+    const pushed = onActionFailed(entry({ pr: null, pushedSha: "abc1234" }), { kind: "publish", update: false }, { message: "x" }); // prettier-ignore
+    expect(ofKind(pushed ?? [], "remove-worktree")).toEqual([
+      { kind: "remove-worktree", remote: false, keepUnpushed: true },
+    ]);
   });
 
   it("publish exit 3 — release blocked 'rebase conflict'; any other failure quotes the output; no blocked transition", () => {

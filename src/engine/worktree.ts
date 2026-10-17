@@ -257,7 +257,7 @@ function localIssueBranches(
  * throwing `git()`, deliberately: an unreachable remote has to fail loudly here, because a
  * silent empty listing is exactly the missed deletion this exists for.
  */
-function remoteIssueBranches(
+export function remoteIssueBranches(
   root: string,
   issue: number,
   cfg: ProjectConfig,
