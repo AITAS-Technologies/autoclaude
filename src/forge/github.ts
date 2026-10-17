@@ -131,6 +131,16 @@ export interface PrSummary {
   url: string;
 }
 
+/** One workflow run as `gh run list` reports it. */
+export interface RunSummary {
+  databaseId: number;
+  conclusion: string | null;
+  status: string;
+  url: string;
+  headSha: string;
+  workflowName: string;
+}
+
 export interface PrThread {
   number: number;
   title: string;
@@ -228,6 +238,33 @@ export class Forge {
   /** The body goes through stdin, so markers, quotes and newlines never meet a shell. */
   commentIssue(n: number, body: string): void {
     this.text(["issue", "comment", String(n), "--body-file", "-"], body);
+  }
+
+  /** A comment on a pull request's conversation, through stdin like every other body here. */
+  commentPr(n: number, body: string): void {
+    this.text(["pr", "comment", String(n), "--body-file", "-"], body);
+  }
+
+  /**
+   * The newest workflow runs of a branch, newest first. A bounded read on purpose: the gate
+   * step wants the run behind a red check, which is among the last few, not a complete list.
+   */
+  listRuns(branch: string, limit = 20): RunSummary[] {
+    return this.json<RunSummary[]>([
+      "run",
+      "list",
+      "--branch",
+      branch,
+      "--limit",
+      String(limit),
+      "--json",
+      "databaseId,conclusion,status,url,headSha,workflowName",
+    ]);
+  }
+
+  /** The log of a run's failed steps only. */
+  runFailedLog(id: number): string {
+    return this.text(["run", "view", String(id), "--log-failed"]);
   }
 
   /**

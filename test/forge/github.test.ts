@@ -118,8 +118,33 @@ describe("the wrappers compose the right command lines", () => {
     const forge = new Forge(REPO, f.exec);
     forge.commentIssue(3, hostile);
     forge.editPrBody(4, hostile);
-    expect(f.inputs).toEqual([hostile, hostile]);
+    forge.commentPr(5, hostile);
+    expect(f.inputs).toEqual([hostile, hostile, hostile]);
     expect(f.calls.flat()).not.toContain(hostile);
+    expect(f.calls[2]).toEqual(["gh", "-R", REPO, "pr", "comment", "5", "--body-file", "-"]);
+  });
+
+  it("reads a branch's newest runs and a run's failed steps, with -R", () => {
+    const f = fake({ "-R o/r run list": '[{"databaseId":9}]', "-R o/r run view 9": "log\n" });
+    const forge = new Forge(REPO, f.exec);
+    expect(forge.listRuns("agent/42-fix-it")[0]?.databaseId).toBe(9);
+    expect(forge.runFailedLog(9)).toBe("log\n");
+    expect(f.calls).toEqual([
+      [
+        "gh",
+        "-R",
+        REPO,
+        "run",
+        "list",
+        "--branch",
+        "agent/42-fix-it",
+        "--limit",
+        "20",
+        "--json",
+        "databaseId,conclusion,status,url,headSha,workflowName",
+      ],
+      ["gh", "-R", REPO, "run", "view", "9", "--log-failed"],
+    ]);
   });
 });
 
