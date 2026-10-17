@@ -999,6 +999,24 @@ describe("tick: Step 4 and the control files", () => {
     });
   });
 
+  // F1: a `worktrees.copy` entry the creation skipped is on the issue's events log, reason and all.
+  it("notes every worktrees.copy entry the creation skipped", async () => {
+    const r = rig();
+    r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));
+    created(r);
+    const make = r.seams.createWorktree.impl;
+    r.seams.createWorktree.impl = (...a) => ({
+      ...make(...a),
+      missing: [{ entry: ".env.local", reason: "the project root has no such file" }],
+    });
+    r.seams.runStage.impl = () => new Promise(() => {});
+    await tick(r.ctx);
+    expect(r.entry(12)?.state).toBe("planning");
+    expect(r.notes).toContain(
+      "#12 worktrees.copy: .env.local was not copied: the project root has no such file",
+    );
+  });
+
   it("a leftover worktree with no ledger entry: released blocked with the rollback remedy, nothing run", async () => {
     const r = rig();
     r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));

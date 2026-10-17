@@ -404,7 +404,7 @@ describe("autoclaude review --pr", () => {
       const path = join(root, ".autoclaude", "config.json");
       const doc = JSON.parse(readFileSync(path, "utf8"));
       doc.bootstrap = "echo ran >> bootstrap.log";
-      doc.worktrees = { root: ".autoclaude/worktrees", copy: ["secret.env"] };
+      doc.worktrees = { root: ".autoclaude/worktrees", copy: ["secret.env", "absent.env"] };
       writeFileSync(path, JSON.stringify(doc));
       writeFileSync(join(root, "secret.env"), "TOKEN=x\n");
     }
@@ -518,8 +518,13 @@ describe("autoclaude review --pr", () => {
 
   it("is the unattended pipeline: bootstrap runs once and worktrees.copy is copied", async () => {
     const r = rig({ prepared: true });
-    expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
+    const c = capture();
+    expect(await reviewVerb(["--pr", "40"], c.io, "x", r.deps)).toBe(0);
     expect(r.calls[0]).toMatchObject({ secret: true, bootstraps: 1 });
+    // F1: an entry the copy skipped is said on stderr, not dropped.
+    expect(c.errText()).toContain(
+      "worktrees.copy: absent.env was not copied: the project root has no such file",
+    );
   });
 
   it("runs the bootstrap of a ledger worktree once, not again when its marker is there", async () => {

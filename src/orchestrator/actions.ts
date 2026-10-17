@@ -512,7 +512,7 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
         cfg,
         exec,
       );
-      for (const note of made.notes) ctx.notes(issue, note);
+      noteCreated(ctx, issue, made);
       updateLedger(
         root,
         (l) => {
@@ -524,6 +524,17 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
       return [`worktree ${made.worktree}`];
     }
   }
+}
+
+/**
+ * What a new worktree's creation reported, on the issue's events log: a fallback it took, a
+ * remote tip that moved, and every `worktrees.copy` entry it skipped. A stage that runs
+ * without a configured file fails in ways that do not name it, so the skip is said here.
+ */
+function noteCreated(ctx: TickCtx, issue: number, made: ReturnType<typeof createWorktree>): void {
+  for (const note of made.notes) ctx.notes(issue, note);
+  for (const m of made.missing)
+    ctx.notes(issue, `worktrees.copy: ${m.entry} was not copied: ${m.reason}`);
 }
 
 /**
@@ -706,7 +717,7 @@ export async function takeIssue(
       lines: ["claimed", "the worktree could not be created", "released to blocked"],
     };
   }
-  for (const note of made.notes) ctx.notes(n, note);
+  noteCreated(ctx, n, made);
   const now = ctx.now();
   updateLedger(
     root,

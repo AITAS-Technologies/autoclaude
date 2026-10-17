@@ -100,7 +100,8 @@ export async function reviewVerb(
       exec("git", ["worktree", "prune"], { cwd: root });
       git(["worktree", "add", "--detach", "--quiet", worktree, pr.headRefOid], exec, root);
       created = worktree;
-      copyIntoWorktree(root, worktree, cfg);
+      for (const m of copyIntoWorktree(root, worktree, cfg).missing)
+        io.err(`worktrees.copy: ${m.entry} was not copied: ${m.reason}\n`);
     }
     const failed = await bootstrapWorktree(cfg, worktree, ctx.now());
     if (failed !== null) {

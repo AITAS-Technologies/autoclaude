@@ -11,8 +11,8 @@
  * through a shell.
  */
 
-import { cpSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ProjectConfig } from "../config/types.js";
 import { git, realExec, type Exec } from "../forge/github.js";
 import { toPosix } from "../platform/paths.js";
@@ -90,8 +90,11 @@ export interface CreatedWorktree {
   worktree: string;
   /** The `worktrees.copy` entries that were copied in, as configured. */
   copied: string[];
-  /** The `worktrees.copy` entries that do not exist in the project root (skipped, not an error). */
-  missing: string[];
+  /**
+   * The `worktrees.copy` entries that were skipped, not an error: not in the project root, or
+   * a symbolic link (never followed), each with its reason.
+   */
+  missing: NotCopied[];
   /** Things the caller should log: a fallback that was taken, a remote tip that moved. */
   notes: string[];
 }
@@ -153,9 +156,23 @@ export function createWorktree(
   }
   git(["worktree", "add", names.worktree, "-b", names.branch, base], exec, root);
 
-  const { copied, missing } = copyIntoWorktree(root, names.worktree, cfg);
+  let copy: ReturnType<typeof copyIntoWorktree>;
+  try {
+    copy = copyIntoWorktree(root, names.worktree, cfg);
+  } catch (error) {
+    // A failed copy is a failed creation, the way a failed `worktree add` is: undone, so the
+    // next attempt does not meet a worktree and a branch that no ledger entry names.
+    const undone = [
+      exec("git", ["worktree", "remove", "--force", names.worktree], { cwd: root }),
+      exec("git", ["branch", "-D", names.branch], { cwd: root }),
+    ]
+      .filter((r) => r.status !== 0)
+      .map((r) => r.stderr.trim());
+    const left = undone.length > 0 ? `; undoing it failed too: ${undone.join("; ")}` : "";
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${left}`);
+  }
   mkdirSync(join(names.worktree, ".autoclaude", "state", "reports"), { recursive: true });
-  return { branch: names.branch, worktree: names.worktree, copied, missing, notes };
+  return { branch: names.branch, worktree: names.worktree, ...copy, notes };
 }
 
 /**
@@ -355,27 +372,95 @@ export function parseCreateArgs(rest: string[]): { title: string; replace: boole
   return { title, replace: options.includes("--replace") };
 }
 
-/** Copies `worktrees.copy` from the project root into a worktree; returns what was and was not copied. */
+/** A `worktrees.copy` entry, or a link inside one, that was not copied, and why. */
+export interface NotCopied {
+  entry: string;
+  reason: string;
+}
+
+/**
+ * Copies `worktrees.copy` from the project root into a worktree; returns what was and was not
+ * copied.
+ *
+ * A walk of its own (`lstat`, `readdir`, `mkdir`, `copyFile`), not `cpSync`: on Windows with
+ * Node 24, `cpSync` of a directory kills the process (0xC0000409, no `finally` runs) when the
+ * source path holds a non-ASCII character, and copies nothing without an error when only the
+ * destination does. A symbolic link is never followed: a link to a file outside the project
+ * would carry that file in. It is skipped and reported, like an entry that is not there.
+ *
+ * @throws when a copy fails, or an entry is not at the destination afterwards: a worktree
+ *   without its configured files is not one a stage may run in
+ */
 export function copyIntoWorktree(
   root: string,
   worktree: string,
   cfg: Pick<ProjectConfig, "worktrees">,
-): { copied: string[]; missing: string[] } {
+): { copied: string[]; missing: NotCopied[] } {
   const copied: string[] = [];
-  const missing: string[] = [];
+  const missing: NotCopied[] = [];
   for (const entry of cfg.worktrees.copy) {
     const from = resolve(root, entry);
     const rel = relative(root, from);
     // Inside the project root only: a configured `../x` or an absolute path is not a file
     // of this project, so it is reported as not copied rather than followed.
-    if (!rel || rel.startsWith("..") || isAbsolute(rel) || !existsSync(from)) {
-      missing.push(entry);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      missing.push({ entry, reason: "it is not inside the project root" });
+      continue;
+    }
+    if (!existsSync(from) && !isLink(from)) {
+      missing.push({ entry, reason: "the project root has no such file" });
       continue;
     }
     const to = join(worktree, rel);
-    mkdirSync(dirname(to), { recursive: true });
-    cpSync(from, to, { recursive: true });
+    try {
+      mkdirSync(dirname(to), { recursive: true });
+      if (!copyTree(from, to, root, entry, missing)) continue;
+    } catch (error) {
+      throw new Error(
+        `worktrees.copy: copying ${entry} into ${worktree} failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    // Asked of the destination, not assumed from the copy: the failure this replaced was a
+    // copy that reported success and left nothing behind.
+    if (!existsSync(to) || lstatSync(to).isDirectory() !== lstatSync(from).isDirectory())
+      throw new Error(`worktrees.copy: ${entry} is not at ${to} after copying`);
     copied.push(entry);
   }
   return { copied, missing };
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** Copies one file or directory tree; false when `from` itself was skipped (and reported). */
+function copyTree(
+  from: string,
+  to: string,
+  root: string,
+  entry: string,
+  missing: NotCopied[],
+): boolean {
+  const st = lstatSync(from);
+  const shown = toPosix(relative(root, from));
+  if (st.isSymbolicLink()) {
+    missing.push({ entry, reason: `${shown} is a symbolic link, and links are not followed` });
+    return false;
+  }
+  if (st.isDirectory()) {
+    mkdirSync(to, { recursive: true });
+    for (const name of readdirSync(from))
+      copyTree(join(from, name), join(to, name), root, entry, missing);
+    return true;
+  }
+  if (st.isFile()) {
+    copyFileSync(from, to);
+    return true;
+  }
+  missing.push({ entry, reason: `${shown} is neither a file nor a directory` });
+  return false;
 }

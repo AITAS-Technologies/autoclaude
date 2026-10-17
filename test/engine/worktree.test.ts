@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -171,9 +172,79 @@ describe("create and remove, against a real temporary repository", () => {
       cfg: withRoot(".autoclaude/worktrees", ["conf/local.json", "absent.env"]),
     });
     expect(made.copied).toEqual(["conf/local.json"]);
-    expect(made.missing).toEqual(["absent.env"]);
+    expect(made.missing).toEqual([
+      { entry: "absent.env", reason: "the project root has no such file" },
+    ]);
     expect(existsSync(join(wtDir(root, "agent+4-copy-list"), "conf", "local.json"))).toBe(true);
     removeWorktree(root, 4, cfg, { deleteRemote: false });
+  }, 60_000);
+
+  // F1: `cpSync` of a directory killed the process on Windows with Node 24 (0xC0000409) when
+  // the source path held a non-ASCII character, and copied nothing when only the destination
+  // did. This runs on every CI OS, Windows included, with both paths non-ASCII.
+  it("copies a directory entry under a non-ASCII project root into a non-ASCII worktree root", () => {
+    const { root } = repo("autoclaude-wt-Jürgen-");
+    mkdirSync(join(root, "conf", "nested"), { recursive: true });
+    writeFileSync(join(root, "conf", "a.json"), "{}\n");
+    writeFileSync(join(root, "conf", "nested", "b.txt"), "b\n");
+    const local = withRoot("wt Müller", ["conf"]);
+    const made = make(root, 6, "Directory copy", { cfg: local });
+    const into = join(root, "wt Müller", "agent+6-directory-copy");
+    expect(made.copied).toEqual(["conf"]);
+    expect(made.missing).toEqual([]);
+    expect(readFileSync(join(into, "conf", "a.json"), "utf8")).toBe("{}\n");
+    expect(readFileSync(join(into, "conf", "nested", "b.txt"), "utf8")).toBe("b\n");
+    removeWorktree(root, 6, local, { deleteRemote: false });
+  }, 60_000);
+
+  // F1 / C4: a link is never followed. One to outside the project would carry that file in.
+  it("skips a symbolic link, as an entry and inside a directory entry, and says why", (t) => {
+    const { tmp, root } = repo("autoclaude-wt-link-");
+    const outside = join(tmp, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "secret.txt"), "s\n");
+    mkdirSync(join(root, "conf"));
+    writeFileSync(join(root, "conf", "a.json"), "{}\n");
+    // A junction on Windows: it needs no privilege there, and lstat reports it as a link.
+    const type = process.platform === "win32" ? "junction" : "dir";
+    try {
+      symlinkSync(outside, join(root, "linked"), type);
+      symlinkSync(outside, join(root, "conf", "inner"), type);
+    } catch {
+      t.skip();
+    }
+    const local = withRoot(".autoclaude/worktrees", ["linked", "conf"]);
+    const made = make(root, 3, "Links", { cfg: local });
+    expect(made.copied).toEqual(["conf"]);
+    expect(made.missing).toEqual([
+      { entry: "linked", reason: "linked is a symbolic link, and links are not followed" },
+      { entry: "conf", reason: "conf/inner is a symbolic link, and links are not followed" },
+    ]);
+    const into = wtDir(root, "agent+3-links");
+    expect(existsSync(join(into, "linked"))).toBe(false);
+    expect(existsSync(join(into, "conf", "inner"))).toBe(false);
+    expect(existsSync(join(into, "conf", "a.json"))).toBe(true);
+    removeWorktree(root, 3, local, { deleteRemote: false });
+  }, 60_000);
+
+  // F1: a copy that fails is a failed creation, undone like a failed `worktree add`.
+  it("fails the creation when a copy fails, and leaves no worktree or branch behind", () => {
+    const { root } = repo("autoclaude-wt-copyfail-");
+    // The integration branch has a file `conf`; the main checkout has a directory there now,
+    // so copying it into the fresh worktree meets the checked-out file.
+    writeFileSync(join(root, "conf"), "a file\n");
+    sh(root, "add", "conf");
+    sh(root, "commit", "-m", "conf file");
+    sh(root, "push", "origin", "develop");
+    rmSync(join(root, "conf"));
+    mkdirSync(join(root, "conf"));
+    writeFileSync(join(root, "conf", "a.json"), "{}\n");
+    const local = withRoot(".autoclaude/worktrees", ["conf"]);
+    expect(() => make(root, 2, "Copy fails", { cfg: local })).toThrow(
+      /worktrees\.copy: copying conf into .* failed/,
+    );
+    expect(existsSync(wtDir(root, "agent+2-copy-fails"))).toBe(false);
+    expect(sh(root, "branch", "--list", "agent/2-copy-fails")).toBe("");
   }, 60_000);
 
   // New: a root with a space and a non-ASCII character (design § 13, plan Review Focus 1).
