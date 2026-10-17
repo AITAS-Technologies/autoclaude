@@ -105,7 +105,9 @@ export function renderReviewComment(
   notes: { decision?: string | null; config?: string | null } = {},
   style: CommentStyle = { ...DEFAULT_MESSAGES, humans: [] },
 ): string {
-  const out = [`${REVIEW_COMMENT_MARKER} sha=${sha} -->`, "", "## Agent code review", ""];
+  // The marker line is the engine's own and goes in front after `presentText`, which breaks
+  // every engine marker the rest of the comment quotes.
+  const out = ["", "## Agent code review", ""];
 
   // A report that stopped before its status line is not a report that found nothing.
   if (!review.complete) {
@@ -166,7 +168,7 @@ export function renderReviewComment(
   // Every finding's message, quote and uncertain line above is the reviewer's own text,
   // and a workflow that triggers on the mention it may contain would start a run from
   // inside a review comment.
-  return presentText(out.join("\n"), style, style.humans);
+  return `${REVIEW_COMMENT_MARKER} sha=${sha} -->\n${presentText(out.join("\n"), style, style.humans)}`;
 }
 
 /**

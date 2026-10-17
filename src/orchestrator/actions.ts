@@ -428,14 +428,18 @@ function dispatch(
   return lines;
 }
 
-/** The comment's target: the pull request for an entry in a pull request state, else the issue. */
-function commentOn(ctx: TickCtx, issue: number, body: string): void {
+/**
+ * The comment's target: the pull request for an entry in a pull request state, else the issue.
+ * The engine's marker, when the comment has one, goes in front of the presented text.
+ */
+function commentOn(ctx: TickCtx, issue: number, body: string, marker?: string): void {
   const entry = loadLedger(ctx.root).issues[String(issue)];
-  const text = presentText(
+  const presented = presentText(
     `${body}\n\n${ctx.cfg.messages.footer}`,
     ctx.cfg.messages,
     ctx.cfg.humans,
   );
+  const text = marker === undefined ? presented : `${marker}\n${presented}`;
   if (entry && entry.pr !== null && PR_STATES.has(entry.state)) ctx.forge.commentPr(entry.pr, text);
   else ctx.forge.commentIssue(issue, text);
 }
@@ -502,7 +506,7 @@ async function run(ctx: TickCtx, d: EngineDeps, issue: number, a: Action): Promi
       return [];
     }
     case "comment":
-      commentOn(ctx, issue, a.body);
+      commentOn(ctx, issue, a.body, a.marker);
       return [];
     case "recreate-worktree": {
       const entry = current(ctx, issue);

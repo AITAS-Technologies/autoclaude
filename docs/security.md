@@ -4,7 +4,7 @@ autoclaude runs a coding-agent CLI on your machine, on code and issue text you d
 
 ## What the design holds
 
-**The engine does every write to GitHub.** Labels, comments, pushes, pull request creation and updates are all made by the orchestrator, with your own `gh` login and your git credentials. A stage process (the headless `claude -p`) reads the issue text and the code, edits files in its worktree, runs the gates and commits locally. It never fetches, pulls, pushes or calls `gh`. Phase 1 never merges.
+**The engine does every write to GitHub.** Labels, comments, pushes, pull request creation and updates are all made by the orchestrator, with your own `gh` login and your git credentials. A stage process (the headless `claude -p`) reads the issue text and the code, edits files in its worktree, runs the gates and commits locally. It never fetches, pulls, pushes or calls `gh`. Phase 1 never merges. Model-written text that the engine posts has CI skip markers and the engine's own HTML comment markers broken, so a quoted claim or review marker is never read back as one, and mentions defused unless `messages.defuseMentions` is off.
 
 The protection against a stage reaching the forge anyway is three layers. Each is meant to hold when the others miss something.
 

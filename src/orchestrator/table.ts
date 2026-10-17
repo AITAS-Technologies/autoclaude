@@ -73,7 +73,15 @@ export type Action =
       /** Keep the worktree when its HEAD is not the pushed head: it holds the only copy. */
       keepUnpushed?: boolean;
     }
-  | { kind: "comment"; body: string }
+  | {
+      kind: "comment";
+      body: string;
+      /**
+       * The engine's own marker, put in front of the body after the body is presented: the
+       * presenting breaks every engine marker it finds, as it must in model-written text.
+       */
+      marker?: string;
+    }
   | { kind: "recreate-worktree" };
 
 /** The fields of an entry the table reads; a ledger entry and a situation issue both have them. */
@@ -719,7 +727,8 @@ export function onPullRequest(
       },
       {
         kind: "comment",
-        body: `${marker}\nThe required checks still fail after ${cfg.caps.fixRounds} fix rounds (${detail}).${run} The issue is released as blocked; a human decides how to go on.`,
+        marker,
+        body: `The required checks still fail after ${cfg.caps.fixRounds} fix rounds (${detail}).${run} The issue is released as blocked; a human decides how to go on.`,
       },
     ];
   }
@@ -744,7 +753,8 @@ export function onPullRequest(
       },
       {
         kind: "comment",
-        body: `${marker}\nNo gate run reported for ${sha} in 20 minutes (${detail}). A skip marker in the commit subject or a paths filter in the workflow keeps the gates from starting; a human decides whether to amend the subject or re-run them.`,
+        marker,
+        body: `No gate run reported for ${sha} in 20 minutes (${detail}). A skip marker in the commit subject or a paths filter in the workflow keeps the gates from starting; a human decides whether to amend the subject or re-run them.`,
       },
     ];
   }
@@ -845,7 +855,7 @@ export function onTriage(triage: Triage, previous: string | null, cfg: ProjectCo
           kind: "note",
           text: `triage ${triage.decision} again: the decision is unchanged, no new comment`,
         }
-      : { kind: "comment", body: `${triageMarker(triage.decision)}\n${text}` },
+      : { kind: "comment", marker: triageMarker(triage.decision), body: text },
   ];
 }
 

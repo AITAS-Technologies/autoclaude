@@ -73,11 +73,20 @@ export const DEFAULT_MESSAGES: ProjectConfig["messages"] = {
   defuseMentions: true,
 };
 
+/** The opening of every HTML comment marker the engine writes and parses: `<!-- autodev-…`. */
+const ENGINE_MARKER = /<!--(?=\s*autodev-)/gi;
+
 /**
  * Every message, quote and uncertain line the engine writes to GitHub is model-written
  * text, and a workflow that triggers on a mention would start a run from inside a pull
  * request body or a review comment. Defusing is the project's to turn off
  * (`messages.defuseMentions`), and its own people (`humans`) stay mentionable.
+ *
+ * The engine's own markers (`<!-- autodev-claim \u2026`, `-release`, `-review`, `-pr`, `-gates`,
+ * `-triage`, `-archive`) are broken in it too, always: they are HTML comments the engine reads
+ * back from GitHub, and one quoted in a triage comment was the earliest active claim of its
+ * issue, which every later claim then lost. A caller that writes a marker of its own puts it in
+ * front of the text after this has run.
  */
 export function presentText(
   text: string,
@@ -86,10 +95,10 @@ export function presentText(
 ): string {
   // Skip markers are defused whatever the mention policy says: a body becomes the squash
   // commit body, where GitHub reads them, and no project wants its CI silenced by a quote.
-  const quiet = text.replace(
-    /\[(?=(?:skip ci|ci skip|no ci|skip actions|actions skip)\])/gi,
-    "[\u200b",
-  );
+  const quiet = text
+    .replace(/\[(?=(?:skip ci|ci skip|no ci|skip actions|actions skip)\])/gi, "[\u200b")
+    // `<` and `!` apart: GitHub renders the marker as text, and no parser here matches it.
+    .replace(ENGINE_MARKER, "<\u200b!--");
   return messages.defuseMentions ? defuseMentions(quiet, humans) : quiet;
 }
 
@@ -411,12 +420,10 @@ export function prBody(
   // The findings, the quotes, the criteria and the implementer's own lines are all
   // model-written, and a workflow that triggers on the mention they may contain would start
   // a run from inside a pull request body. One helper with `post-review.ts`, whose comment
-  // carries the same text.
-  return presentText(
+  // carries the same text. The engine's own marker goes in after it, or it would be broken
+  // with every marker the model text quotes.
+  const presented = presentText(
     [
-      `Closes #${issue}`,
-      "",
-      `<!-- autodev-pr issue="${issue}" machine="${machine}" -->`,
       "Opened by autoclaude after a local review with a fresh context. A human reviews and merges; nothing here merges itself.",
       "",
       "## Acceptance criteria",
@@ -462,6 +469,12 @@ export function prBody(
     messages,
     humans,
   );
+  return [
+    `Closes #${issue}`,
+    "",
+    `<!-- autodev-pr issue="${issue}" machine="${machine}" -->`,
+    presented,
+  ].join("\n");
 }
 
 /** The engine's state directory in a worktree, as a diff names it. */

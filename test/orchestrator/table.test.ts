@@ -972,7 +972,7 @@ describe("triage results are applied by the engine (design § 10)", () => {
   it("ready — apply the ready label and post the comment under the triage marker", () => {
     expect(onTriage(triage("ready"), null, cfg)).toEqual([
       { kind: "label", add: "agent-ready" },
-      { kind: "comment", body: `${triageMarker("ready")}\nTriage: meets the standard` },
+      { kind: "comment", marker: triageMarker("ready"), body: "Triage: meets the standard" },
     ]);
   });
 
@@ -980,7 +980,11 @@ describe("triage results are applied by the engine (design § 10)", () => {
     expect(onTriage(triage("needs-shaping", "Proposed acceptance criteria"), "ready", cfg)).toEqual(
       [
         { kind: "label", add: "needs-shaping" },
-        { kind: "comment", body: `${triageMarker("needs-shaping")}\nProposed acceptance criteria` },
+        {
+          kind: "comment",
+          marker: triageMarker("needs-shaping"),
+          body: "Proposed acceptance criteria",
+        },
       ],
     );
   });
