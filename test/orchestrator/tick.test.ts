@@ -21,6 +21,7 @@ import { join, resolve } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { loadProjectConfig } from "../../src/config/load.js";
 import { claimBody } from "../../src/engine/claims.js";
+import { createWorktree, removeWorktree } from "../../src/engine/worktree.js";
 import { control } from "../../src/engine/control.js";
 import {
   loadLedger,
@@ -212,6 +213,18 @@ function rig(opts: { instance?: string } = {}) {
     if (cmd === "git") {
       if (args.includes("worktree") && args.includes("list"))
         return ok(worktrees.map((w) => `worktree ${w}\nHEAD abc\n\n`).join(""));
+      // `worktree remove --force <path>` and `worktree add <path> -b <branch> <base>`, so the
+      // engine's own create and remove can run against this list.
+      const at = args.indexOf("worktree");
+      if (at >= 0 && args[at + 1] === "remove") {
+        const path = args.at(-1)!;
+        worktrees.splice(worktrees.indexOf(path), 1);
+        rmSync(path, { recursive: true, force: true });
+      }
+      if (at >= 0 && args[at + 1] === "add") {
+        worktrees.push(args[at + 2]!);
+        mkdirSync(args[at + 2]!, { recursive: true });
+      }
       return ok();
     }
     const [, , noun, verb, ...rest] = args;
@@ -249,6 +262,10 @@ function rig(opts: { instance?: string } = {}) {
       return ok();
     }
     if (noun === "pr" && verb === "list") return ok(JSON.stringify(prs));
+    if (noun === "pr" && verb === "view") {
+      const pr = prs.find((x) => x.number === n);
+      return ok(JSON.stringify({ number: n, state: pr?.state, headRefOid: "abc1234", labels: [] }));
+    }
     if (noun === "pr" && verb === "comment") {
       prComments.push({ pr: n, body: o?.input ?? "" });
       return ok();
@@ -330,6 +347,7 @@ function rig(opts: { instance?: string } = {}) {
     },
     now: () => clock,
     entry: (n: number) => loadLedger(root).issues[String(n)],
+    worktrees,
     comments: (n: number) => (issues.get(n)?.comments ?? []).map((c) => c.body),
     /** A ledger entry of this machine's, its worktree on disk and registered, its issue claimed. */
     seed(
@@ -541,7 +559,7 @@ describe("tick: Step 2 settles finished stages", () => {
     await flush();
     const limited = await tick(r.ctx);
     expect(loadLedger(r.root).limitedUntil).toBe(resetsAt);
-    expect(r.entry(42)).toMatchObject({ state: "planning", stage: null });
+    expect(r.entry(42)).toMatchObject({ state: "planning", stage: null, limitedStage: "plan" });
     expect(r.entry(42)?.attempts.reviewRetry, "quota is not the code's fault").toBe(0);
     expect(limited.nextWakeMs).toBe(30 * 60_000);
 
@@ -553,8 +571,34 @@ describe("tick: Step 2 settles finished stages", () => {
     r.advance(21);
     r.seams.runStage.impl = () => new Promise(() => {});
     await tick(r.ctx);
+    // Plan has no resume mode (F2), so its resume is fresh; no counter either way (design § 9).
     expect(r.seams.runStage.calls.map((c) => c[3])).toEqual(["fresh", "fresh"]);
+    expect(r.entry(42)).toMatchObject({
+      state: "planning",
+      stage: { stage: "plan" },
+      limitedStage: null,
+      attempts: { reviewRetry: 0, plan: 0 },
+    });
+  });
+
+  it("a limit recorded in Step 2 holds the dispatches of the entries after it in the same tick", async () => {
+    const r = rig();
+    r.seed(41, "claimed");
+    r.seed(42, "claimed");
+    const resetsAt = new Date(r.now().getTime() + 30 * 60_000).toISOString();
+    r.seams.runStage.impl = async (_c, e) => {
+      if (e.issue === 41) return { kind: "limit", resetsAt, result: okResult({ exit: "limit" }) };
+      writeReport(e.worktree, "plan", PLANNED);
+      return { kind: "report", text: PLANNED, result: okResult() };
+    };
+    r.seams.runPlanReview.impl = () => new Promise(() => {});
+    await tick(r.ctx);
+    await flush();
+    const summary = await tick(r.ctx);
+    expect(loadLedger(r.root).limitedUntil).toBe(resetsAt);
+    expect(r.seams.runPlanReview.calls, "#42's plan review would run into #41's limit").toEqual([]);
     expect(r.entry(42)).toMatchObject({ state: "planning", stage: { stage: "plan" } });
+    expect(summary.waiting).toContain("#42: plan finished; what follows waits for the limit");
   });
 
   it("a finished stage whose row dispatches waits while limited, and is decided after the limit", async () => {
@@ -597,7 +641,7 @@ describe("tick: Step 2 settles finished stages", () => {
     expect(r.issues.get(42)!.labels.map((l) => l.name)).not.toContain("agent-retry-1");
   });
 
-  it("files a report left from a decided round aside before it dispatches the stage again", async () => {
+  it("files an earlier run's report aside before it dispatches the stage again", async () => {
     const r = rig();
     const worktree = r.seed(42, "resume-needed");
     writeReport(worktree, "code-review", STOPPED_REVIEW);
@@ -606,7 +650,7 @@ describe("tick: Step 2 settles finished stages", () => {
     const late = join(r.root, ".autoclaude", "state", "runs", "42", "code-review-late-1.md");
     expect(existsSync(late)).toBe(true);
     expect(readFileSync(late, "utf8")).toContain('late="true"');
-    expect(r.notes).toContain("#42 late report filed aside: its round was already decided");
+    expect(r.notes).toContain("#42 an earlier run's report filed aside: this run writes its own");
     expect(summary.changed.some((c) => c.includes("code-review-late-1.md"))).toBe(true);
   });
 
@@ -633,7 +677,7 @@ describe("tick: Step 2 settles finished stages", () => {
     expect(r.entry(42)).toMatchObject({ state: "done", stage: null });
   });
 
-  it("publish exit 3 releases blocked 'rebase conflict'", async () => {
+  it("publish exit 3 releases blocked 'rebase conflict', and only releases", async () => {
     const r = rig();
     const worktree = r.seed(42, "resume-needed");
     r.seams.runCodeReview.impl = async () => ({
@@ -647,9 +691,13 @@ describe("tick: Step 2 settles finished stages", () => {
     await tick(r.ctx);
     expect(r.notes).toContain("#42 decision publish blocking=0 deferred=0");
     expect(r.seams.publish.calls.map((c) => [c[0], c[1]])).toEqual([[42, false]]);
-    expect(r.entry(42)?.state).toBe("blocked");
-    expect(r.entry(42)?.lastError).toMatch(/^rebase conflict/);
-    expect(r.comments(42).some((b) => b.includes("rebase conflict"))).toBe(true);
+    // No `blocked` transition: the cleanup it would start deletes the remote branch, which
+    // closes an open pull request. The record ends in place; reconcile drops the entry.
+    expect(r.entry(42)).toMatchObject({ state: "code-reviewing", stage: null });
+    expect(r.comments(42).some((b) => b.includes("autodev-release") && b.includes("rebase conflict"))).toBe(true); // prettier-ignore
+    await tick(r.ctx);
+    expect(r.seams.removeWorktree.calls, "no cleanup follows the release").toEqual([]);
+    expect(r.comments(42).filter((b) => b.includes("autodev-release"))).toHaveLength(1);
   });
 
   it("a label that cannot be applied releases blocked quoting the edit, and nothing is dispatched", async () => {
@@ -669,7 +717,8 @@ describe("tick: Step 2 settles finished stages", () => {
     await flush();
     await tick(r.ctx);
     expect(r.seams.runCodeReview.calls, "no re-dispatch after the failed edit").toHaveLength(1);
-    expect(r.entry(42)?.state).toBe("blocked");
+    expect(r.entry(42)).toMatchObject({ state: "code-reviewing", stage: null });
+    expect(r.issues.get(42)!.labels.map((l) => l.name)).toContain("agent-blocked");
     expect(r.comments(42).some((b) => b.includes("agent-retry-1") && b.includes("HTTP 502"))).toBe(true); // prettier-ignore
     // The report the retry would have replaced is still where the decision read it.
     expect(existsSync(join(worktree, ".autoclaude", "state", "reports", "code-review.md"))).toBe(true); // prettier-ignore
@@ -708,9 +757,9 @@ describe("tick: Step 3 pull requests", () => {
     });
   };
 
-  function prRig() {
+  function prRig(patch: Partial<LedgerEntry> = {}) {
     const r = rig();
-    r.seed(42, "pr-open", { pr: 7, pushedSha: "abc1234" });
+    r.seed(42, "pr-open", { pr: 7, pushedSha: "abc1234", ...patch });
     r.prs.push({
       number: 7,
       state: "OPEN",
@@ -754,6 +803,111 @@ describe("tick: Step 3 pull requests", () => {
       lastCanMerge: "REFUSED: no blocking findings, diff matches the review",
     });
     expect(summary.waiting.some((w) => w.includes("#42") && w.includes("human"))).toBe(true);
+  });
+
+  const redRun = (r: ReturnType<typeof rig>, headSha = "abc1234") =>
+    r.runs.push({
+      databaseId: 9,
+      conclusion: "failure",
+      status: "completed",
+      url: "https://github.com/acme/widgets/actions/runs/9",
+      headSha,
+      workflowName: "ci",
+    });
+
+  it("reads the failed run of the pull request's current head only", async () => {
+    const r = prRig();
+    prOf(r, [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]);
+    redRun(r, "0ld0ld0");
+    r.seams.runStage.impl = () => new Promise(() => {});
+    await tick(r.ctx);
+    // An earlier head's failure is not this one: its log is not handed to the fix round.
+    expect(r.seams.runStage.calls[0]?.[4]?.gateLog).toMatch(/could not be read/);
+  });
+
+  it("a fixing-ci implement run without a report is retried once in its tick, never handed to Step 3", async () => {
+    const r = prRig();
+    prOf(r, [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]);
+    redRun(r);
+    r.seams.runStage.impl = async () => ({ kind: "no-report", result: okResult({ exit: "failed" }) }); // prettier-ignore
+    await tick(r.ctx);
+    await flush();
+    r.seams.runStage.impl = () => new Promise(() => {});
+    await tick(r.ctx);
+    expect(r.seams.runStage.calls.map((c) => c[3])).toEqual(["fix", "resume"]);
+    expect(r.seams.canMerge.calls, "Step 3 never saw the entry on the retry's tick").toHaveLength(1); // prettier-ignore
+    expect(r.entry(42)).toMatchObject({
+      state: "fixing-ci",
+      attempts: { fix: 1, reviewRetry: 1 },
+      stage: { stage: "implement", mode: "resume" },
+    });
+    expect(r.issues.get(42)!.labels.map((l) => l.name)).not.toContain("agent-fix-2");
+  });
+
+  it("an implement limit in fixing-ci is resumed after the limit: no new fix round, no counter", async () => {
+    const r = prRig();
+    prOf(r, [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]);
+    redRun(r);
+    const resetsAt = new Date(r.now().getTime() + 30 * 60_000).toISOString();
+    r.seams.runStage.impl = async () => ({ kind: "limit", resetsAt, result: okResult({ exit: "limit" }) }); // prettier-ignore
+    await tick(r.ctx);
+    await flush();
+    await tick(r.ctx);
+    expect(r.entry(42)).toMatchObject({ state: "fixing-ci", stage: null, limitedStage: "implement" }); // prettier-ignore
+    r.advance(10);
+    await tick(r.ctx);
+    expect(r.seams.runStage.calls, "nothing dispatched while limited").toHaveLength(1);
+    r.advance(21);
+    r.seams.runStage.impl = () => new Promise(() => {});
+    await tick(r.ctx);
+    expect(r.seams.runStage.calls.map((c) => [c[2], c[3]])).toEqual([
+      ["implement", "fix"],
+      ["implement", "resume"],
+    ]);
+    expect(r.entry(42)).toMatchObject({
+      state: "fixing-ci",
+      attempts: { fix: 1, reviewRetry: 0 },
+      limitedStage: null,
+      stage: { stage: "implement", mode: "resume" },
+    });
+    expect(r.issues.get(42)!.labels.map((l) => l.name)).not.toContain("agent-fix-2");
+    expect(r.seams.canMerge.calls, "the resume needs no verdict").toHaveLength(1);
+  });
+
+  it("a blocked entry whose pull request is open is cleaned up without deleting its remote branch", async () => {
+    const r = prRig({ lastError: "wall clock: implement" });
+    updateLedger(r.root, (l) => {
+      transition(l, 42, "blocked", { lastError: "wall clock: implement" }, r.now());
+    });
+    const summary = await tick(r.ctx);
+    expect(r.seams.removeWorktree.calls.map((c) => [c[1], c[3]])).toEqual([
+      [42, { deleteRemote: false }],
+    ]);
+    expect(summary.changed.join(" ")).toContain("pull request #7 is still open");
+  });
+
+  it("gates red at the cap remove the worktree, so the issue can be claimed again later", async () => {
+    const r = prRig({ attempts: { implement: 1, fix: 2, reviewRetry: 0, plan: 0 } });
+    r.seams.removeWorktree.impl = removeWorktree;
+    r.seams.createWorktree.impl = createWorktree;
+    prOf(r, [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]);
+    redRun(r);
+    await tick(r.ctx);
+    expect(r.seams.removeWorktree.calls.map((c) => [c[1], c[3]])).toEqual([
+      [42, { deleteRemote: false }],
+    ]);
+    expect(r.worktrees).toEqual([]);
+    expect(r.prComments.some((c) => c.pr === 7 && c.body.includes("still fail after 2 fix rounds"))).toBe(true); // prettier-ignore
+    // A human closes the pull request and puts the issue back in the queue.
+    r.prs[0]!.state = "CLOSED";
+    r.prs[0]!.closedAt = r.now().toISOString();
+    r.issues.get(42)!.labels.push({ name: "agent-ready" });
+    r.seams.runStage.impl = () => new Promise(() => {});
+    r.advance(5);
+    const again = await tick(r.ctx);
+    expect(again.changed.join(" ")).not.toMatch(/could not be created|already has a worktree/);
+    expect(r.entry(42)).toMatchObject({ state: "planning", stage: { stage: "plan" } });
+    expect(r.worktrees).toHaveLength(1);
   });
 
   it("pull requests waiting on their gates wake the loop in 600 s", async () => {
@@ -915,6 +1069,19 @@ describe("triage applied by the engine", () => {
     await triageIssue(r.ctx, 12);
     expect(r.comments(12)).toHaveLength(1);
     expect(r.issues.get(12)!.labels.map((l) => l.name)).toContain("needs-shaping");
+  });
+
+  it("a label that cannot be applied fails the triage: no release and no ledger entry for an unclaimed issue", async () => {
+    const r = rig();
+    r.issues.set(12, r.issue(12));
+    r.seams.runStage.impl = async () => ({ kind: "report", text: answer("ready", "Triage: ok"), result: okResult() }); // prettier-ignore
+    r.fail.addLabel = "agent-ready";
+    const out = await triageIssue(r.ctx, 12);
+    expect(out.decision).toBe("failed");
+    expect(r.issues.get(12)!.labels.map((l) => l.name)).not.toContain("agent-blocked");
+    expect(r.comments(12).some((b) => b.includes("autodev-release"))).toBe(false);
+    expect(r.entry(12)).toBeUndefined();
+    expect(r.notes.some((n) => n.startsWith("#12 triage: applying the ready result failed"))).toBe(true); // prettier-ignore
   });
 
   it("never triages a closed issue, and skips an assigned one with a note", async () => {

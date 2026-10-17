@@ -136,11 +136,17 @@ function lateReport(
   return decision === null ? undefined : { stage, outcome, decision };
 }
 
-/** The run behind a red required check, newest first, preferring the pushed head's. */
-function gateRun(ctx: TickCtx, e: SituationIssue): GateRun | null {
+/**
+ * The run behind a red required check: the newest failed run of the pull request's current head.
+ * A failed run of an earlier head is not this failure, and its log would send a fix round after
+ * something already fixed.
+ */
+function gateRun(ctx: TickCtx, e: SituationIssue, pr: number): GateRun | null {
   try {
-    const failed = ctx.forge.listRuns(e.branch).filter((r) => r.conclusion === "failure");
-    const run = failed.find((r) => e.pushedSha !== null && r.headSha === e.pushedSha) ?? failed[0];
+    const head = ctx.forge.viewPr(pr).headRefOid;
+    const run = ctx.forge
+      .listRuns(e.branch)
+      .find((r) => r.conclusion === "failure" && r.headSha === head);
     if (!run) return null;
     const log = ctx.forge.runFailedLog(run.databaseId);
     return {
@@ -233,9 +239,13 @@ async function step2(run: Run, issues: SituationIssue[]): Promise<SituationIssue
     }
     if (actions === null) continue;
     await apply(run, e.issue, actions);
-    // "Leave the entry to Step 3 on this same tick, which now sees it with no stage."
-    const cleared = actions.some((a) => a.kind === "set" && a.stage === "none");
-    if (cleared && ownerOf(e.state, false) === "onPullRequest")
+    // A limit recorded here holds every later dispatch of this tick, this step's included.
+    const limit = actions.find((a) => a.kind === "limit");
+    if (limit?.kind === "limit" && future(limit.until, run.now)) run.limited = true;
+    // "Leave the entry to Step 3 on this same tick, which now sees it with no stage" — only for
+    // an issue that moved on. Any other row that ends the stage (a retry, a limit) has given
+    // the entry its one transition of the tick.
+    if (movedOn(e.state) && ownerOf(e.state, false) === "onPullRequest")
       handOver.push({ ...e, stage: null });
   }
   return handOver;
@@ -266,7 +276,7 @@ function verdictFor(run: Run, e: SituationIssue, pr: number): PrVerdict {
   const { ctx } = run;
   const v = run.d.canMerge(pr, { forge: ctx.forge, exec: ctx.exec, root: ctx.root, cfg: ctx.cfg });
   const verdict: PrVerdict = { allowed: v.allowed, checks: v.checks };
-  if (gateState(verdict) === "fail") verdict.gateRun = gateRun(ctx, e);
+  if (gateState(verdict) === "fail") verdict.gateRun = gateRun(ctx, e, pr);
   return verdict;
 }
 
@@ -283,7 +293,8 @@ async function step3(run: Run, situation: Situation, handOver: SituationIssue[])
   for (const e of entries) {
     if (run.touched.has(e.issue) && !handOver.includes(e)) continue;
     let verdict: PrVerdict | null = null;
-    if (PR_STATES.has(e.state) && e.prState === "OPEN" && e.pr !== null) {
+    // A stage a limit interrupted is resumed whatever the gates say: no verdict needed.
+    if (PR_STATES.has(e.state) && e.prState === "OPEN" && e.pr !== null && !e.limitedStage) {
       try {
         verdict = verdictFor(run, e, e.pr);
       } catch (error) {

@@ -28,6 +28,7 @@ import {
   type LedgerEntry,
 } from "./ledger/ledger.js";
 import { instantInZone, profileAt, wallClockIn, type Profile } from "./profile.js";
+import type { Stage } from "./review/reports.js";
 import { listWorktrees } from "./worktree.js";
 
 export { controlState } from "./control.js";
@@ -266,6 +267,8 @@ export interface SituationIssue {
   pushedSha: string | null;
   updatedAt: string;
   lastError: string | null;
+  /** The stage a usage limit interrupted, to be resumed without a counter once it has passed. */
+  limitedStage: Stage | null;
 }
 
 export interface Situation {
@@ -355,6 +358,7 @@ export function computeSituation(root: string, cfg: ProjectConfig, deps: Situati
     updatedAt: e.updatedAt,
     // The pull request step quotes it when it releases a blocked entry.
     lastError: e.lastError,
+    limitedStage: e.limitedStage ?? null,
   }));
   const profile = profileAt(now, cfg);
   const control = controlState(root);

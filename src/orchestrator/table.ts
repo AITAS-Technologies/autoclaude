@@ -35,9 +35,10 @@ export interface DispatchExtra {
 }
 
 /**
- * One step the engine takes. The brief's union, plus four optional fields the source's
- * command lines carried (`set --error`, `--pr none`, `--can-merge`) and `recreate-worktree`
- * for Step 2b's missing worktree; every GitHub write among them goes through the forge.
+ * One step the engine takes. The brief's union, plus the optional fields the source's command
+ * lines carried (`set --error`, `--pr none`, `--can-merge`), the limit marker, and
+ * `recreate-worktree` for Step 2b's missing worktree; every GitHub write among them goes through
+ * the forge.
  */
 export type Action =
   | {
@@ -60,6 +61,8 @@ export type Action =
       error?: string;
       pr?: "none";
       canMerge?: string;
+      /** Marks the stage a usage limit interrupted; any later dispatch clears it. */
+      limitedStage?: Stage;
     }
   | { kind: "limit"; until: string }
   | { kind: "note"; text: string }
@@ -71,7 +74,7 @@ export type Action =
 /** The fields of an entry the table reads; a ledger entry and a situation issue both have them. */
 export type TableEntry = Pick<
   LedgerEntry,
-  "issue" | "state" | "attempts" | "pr" | "pushedSha" | "lastError" | "stage"
+  "issue" | "state" | "attempts" | "pr" | "pushedSha" | "lastError" | "stage" | "limitedStage"
 >;
 
 /** Thrown when a handler is given an entry its step does not own. */
@@ -199,10 +202,7 @@ function wallClock(entry: TableEntry, stage: Stage, now: Date): Action[] {
   ];
 }
 
-/**
- * A run that ended without a usable report. The limit is the runtime's (design § 7.3), so it is
- * read off the outcome, never off prose; everything else spends a retry while the cap allows.
- */
+/** A run that ended without a usable report: the wall clock, or a retry while the cap allows. */
 function failedRun(
   entry: TableEntry,
   stage: Stage,
@@ -210,17 +210,6 @@ function failedRun(
   now: Date,
   cfg: ProjectConfig,
 ): Action[] {
-  if (outcome.kind === "limit") {
-    return [
-      { kind: "limit", until: outcome.resetsAt },
-      {
-        kind: "set",
-        state: sameState(entry, stage),
-        stage: "none",
-        note: "interrupted by the limit",
-      },
-    ];
-  }
   if (outcome.kind === "no-report" && outcome.result.exit === "timeout") {
     return wallClock(entry, stage, now);
   }
@@ -257,8 +246,26 @@ function finished(
   cfg: ProjectConfig,
   now: Date,
 ): Action[] {
+  // The limit is the runtime's (design § 7.3), read off the outcome and never off prose, and it
+  // is recorded whatever became of the issue: the account is limited either way.
+  const limit: Action[] =
+    outcome.kind === "limit" ? [{ kind: "limit", until: outcome.resetsAt }] : [];
   if (movedOn(entry.state)) {
-    return [{ kind: "set", state: entry.state, stage: "none", note: MOVED_ON }];
+    return [...limit, { kind: "set", state: entry.state, stage: "none", note: MOVED_ON }];
+  }
+  if (outcome.kind === "limit") {
+    // No counter: quota is not the code's fault. The marker has the owning step resume this
+    // stage, still without a counter, once the limit has passed (design § 9).
+    return [
+      ...limit,
+      {
+        kind: "set",
+        state: sameState(entry, stage),
+        stage: "none",
+        note: "interrupted by the limit",
+        limitedStage: stage,
+      },
+    ];
   }
   if (outcome.kind !== "report") return failedRun(entry, stage, outcome, now, cfg);
 
@@ -488,6 +495,11 @@ export function onStalled(
   // branch when something was pushed) and the dispatch is fresh, because nothing local survived.
   const recreate: Action[] = worktreeExists ? [] : [{ kind: "recreate-worktree" }];
 
+  // A stage a usage limit interrupted: resumed with no counter bumped and no bound counted. The
+  // tick reaches this only once the limit has passed.
+  if (entry.limitedStage)
+    return [...recreate, resumeLimited(entry, entry.limitedStage, worktreeExists)];
+
   if (entry.state === "claimed") {
     return [...recreate, { kind: "dispatch", stage: "plan", mode: "fresh", state: "planning" }];
   }
@@ -521,6 +533,16 @@ export function onStalled(
   ];
 }
 
+/** The dispatch that resumes a stage a usage limit interrupted; the dispatch clears the marker. */
+function resumeLimited(entry: TableEntry, stage: Stage, worktreeExists = true): Action {
+  return {
+    kind: "dispatch",
+    stage,
+    mode: worktreeExists ? resumeMode(stage) : "fresh",
+    state: sameState(entry, stage),
+  };
+}
+
 /** The run behind a red gate: where a human finds it, and its failed steps' log. */
 export interface GateRun {
   url: string;
@@ -550,9 +572,15 @@ export function gateState(
   return "pending";
 }
 
+/**
+ * The cleanup bullets. `prOpen`: the entry's pull request is still open, so its remote branch
+ * stays whatever the bullet says — deleting it would close the pull request, and closing one is
+ * a human's action.
+ */
 function cleanup(
   entry: TableEntry,
   as: "merged" | "closed" | "blocked" | "needs-shaping",
+  prOpen = false,
 ): Action[] {
   switch (as) {
     case "merged":
@@ -579,9 +607,9 @@ function cleanup(
       ];
     case "blocked":
       // The remote branch goes too: a later attempt pushes the same name, and publish refuses
-      // to lease on a remote head the new worktree never had.
+      // to lease on a remote head the new worktree never had. Unless its pull request is open.
       return [
-        { kind: "remove-worktree", remote: true },
+        { kind: "remove-worktree", remote: !prOpen },
         {
           kind: "release",
           to: "blocked",
@@ -590,6 +618,14 @@ function cleanup(
             (entry.pr !== null ? `pull request #${entry.pr} closed without merge` : "blocked"),
         },
         { kind: "set", state: "blocked", pr: "none", stage: "none" },
+        ...(prOpen
+          ? [
+              {
+                kind: "note",
+                text: `the remote branch was kept: pull request #${entry.pr ?? "?"} is still open`,
+              } as const,
+            ]
+          : []),
       ];
     case "needs-shaping":
       return [
@@ -621,7 +657,8 @@ export function onPullRequest(
 ): Action[] {
   if (entry.stage) throw new NotOwned(`#${entry.issue} has a stage: Step 2's first`);
   if (CLEANUP_STATES.has(entry.state)) {
-    return cleanup(entry, entry.state as "merged" | "closed" | "blocked" | "needs-shaping");
+    const as = entry.state as "merged" | "closed" | "blocked" | "needs-shaping";
+    return cleanup(entry, as, pr?.state === "OPEN");
   }
   if (!PR_STATES.has(entry.state))
     throw new NotOwned(`#${entry.issue} (${entry.state}) is not Step 3's`);
@@ -630,6 +667,9 @@ export function onPullRequest(
   // blocked. A closed pull request means "not like this", never "again, identically".
   if (pr?.state === "MERGED") return cleanup(entry, "merged");
   if (pr?.state === "CLOSED") return cleanup(entry, "blocked");
+  // A stage a usage limit interrupted is resumed, not answered with a new fix round: the limit
+  // costs no counter in this state either.
+  if (entry.limitedStage) return [resumeLimited(entry, entry.limitedStage)];
   if (pr?.state !== "OPEN" || verdict === null) return [];
 
   const record: Action = { kind: "set", state: entry.state, canMerge: canMergeLine(verdict) };
@@ -660,6 +700,10 @@ export function onPullRequest(
     const run = verdict.gateRun?.url ? ` The failed run: ${verdict.gateRun.url}` : "";
     return [
       record,
+      // The source releases without a transition, so reconcile drops the entry; the worktree and
+      // the local branch go now, or a later attempt finds them in its way. The pull request keeps
+      // its remote branch.
+      { kind: "remove-worktree", remote: false },
       {
         kind: "release",
         to: "blocked",
@@ -684,6 +728,7 @@ export function onPullRequest(
     const sha = entry.pushedSha ?? "the pushed head";
     return [
       record,
+      { kind: "remove-worktree", remote: false },
       {
         kind: "release",
         to: "blocked",
@@ -712,16 +757,26 @@ export function newWork(situation: Situation, _cfg: ProjectConfig): { issue: num
  * The rows that answer a failed action: a label that could not be applied (the label is the
  * record of the round), a worktree that could not be recreated, a publish that refused. Null
  * for any other action: that failure is not the table's to answer.
+ *
+ * A failed label edit and a failed publish release blocked and nothing else, as the source
+ * says: a `blocked` transition would send the entry through the cleanup, whose remote-branch
+ * deletion closes an open pull request. The stage record, when there is one, is ended in place
+ * (R51: the consuming path clears it), and the entry, its label gone, is dropped by the next
+ * reconcile.
  */
 export function onActionFailed(
-  _entry: TableEntry,
+  entry: TableEntry,
   action: Action,
   failure: { message: string; rebaseConflict?: boolean },
 ): Action[] | null {
   const why = failure.message.replace(/\s+/g, " ").trim().slice(0, 400);
+  const releaseOnly = (reason: string): Action[] => [
+    { kind: "release", to: "blocked", reason },
+    ...(entry.stage ? [{ kind: "set", state: entry.state, stage: "none" } as const] : []),
+  ];
   switch (action.kind) {
     case "label":
-      return blockWith(
+      return releaseOnly(
         costed(
           `the label ${action.add} could not be applied: ${why}`,
           "a round nobody recorded is spent again",
@@ -735,7 +790,7 @@ export function onActionFailed(
         ),
       );
     case "publish":
-      return blockWith(
+      return releaseOnly(
         failure.rebaseConflict
           ? costed("rebase conflict", "a change a human could rebase in a minute waits")
           : costed(`publish failed: ${why}`, "a reviewed change waits for a human"),

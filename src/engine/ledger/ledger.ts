@@ -100,6 +100,12 @@ export interface LedgerEntry {
   lastError: string | null;
   lastCanMerge: string | null;
   updatedAt: string;
+  /**
+   * The stage a usage limit interrupted, until it is dispatched again. Once the limit has
+   * passed it is resumed with no counter bumped, whichever step owns the entry (design § 9: a
+   * limit is not the code's fault). Absent on entries written before the field existed.
+   */
+  limitedStage?: Stage | null;
 }
 
 export interface LedgerEvent {

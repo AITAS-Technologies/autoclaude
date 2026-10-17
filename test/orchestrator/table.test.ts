@@ -503,7 +503,7 @@ describe("Step 2 rows: code-review (the decision is obeyed, never recomputed)", 
 });
 
 describe("Step 2: a run that ended without a usable report", () => {
-  it("limit — record the reset, drop the stage, bump nothing (quota is not the code's fault)", () => {
+  it("limit — record the reset, drop the stage, mark it for a resume, bump nothing (quota is not the code's fault)", () => {
     const pairs = [
       ["plan", "fixing-plan"],
       ["implement", "fixing-ci"],
@@ -515,9 +515,27 @@ describe("Step 2: a run that ended without a usable report", () => {
       const actions = onStageFinished(e, stage, limitHit("2026-03-01T12:00:00.000Z"), null, cfg, NOW); // prettier-ignore
       expect(actions, stage).toEqual([
         { kind: "limit", until: "2026-03-01T12:00:00.000Z" },
-        { kind: "set", state, stage: "none", note: "interrupted by the limit" },
+        {
+          kind: "set",
+          state,
+          stage: "none",
+          note: "interrupted by the limit",
+          limitedStage: stage,
+        },
       ]);
+      expect(ofKind(actions, "set")[0]?.bump, stage).toBeUndefined();
     }
+  });
+
+  it("limit — recorded even when the issue moved on under the stage, which is then only cleared", () => {
+    const e = entry({ state: "closed", stage: stageRun("implement") });
+    expect(
+      onStageFinished(e, "implement", limitHit("2026-03-01T12:00:00.000Z"), null, cfg, NOW),
+    ).toEqual([
+      // prettier-ignore
+      { kind: "limit", until: "2026-03-01T12:00:00.000Z" },
+      { kind: "set", state: "closed", stage: "none", note: "stage stopped: the issue moved on" },
+    ]);
   });
 
   it("limit — a review's limit wins over any report on disk (decided by the outcome, not the file)", () => {
@@ -667,6 +685,32 @@ describe("Step 2b: entries whose stage is gone", () => {
     expect(one(actions, "release").reason).toMatch(/^stage re-dispatched 2 times with no report — if wrong, /); // prettier-ignore
   });
 
+  it("a stage a limit interrupted — resumed once the limit has passed, no counter and no bound (design § 9)", () => {
+    const spent = { implement: 1, fix: 1, reviewRetry: 2, plan: 0 };
+    const cases = [
+      ["implementing", "implement", "resume"],
+      ["fixing-local", "implement", "resume"],
+      ["planning", "plan", "fresh"],
+      ["code-reviewing", "code-review", "fresh"],
+    ] as const;
+    for (const [state, stage, mode] of cases) {
+      const e = entry({ state, stage: null, limitedStage: stage, attempts: spent });
+      // The retry cap is spent, and the resume still goes: a limit is not a failed run.
+      expect(onStalled(e, true, cfg), state).toEqual([{ kind: "dispatch", stage, mode, state }]);
+    }
+    expect(
+      onStalled(
+        entry({ state: "implementing", stage: null, limitedStage: "implement" }),
+        false,
+        cfg,
+      ),
+    ).toEqual([
+      // prettier-ignore
+      { kind: "recreate-worktree" },
+      { kind: "dispatch", stage: "implement", mode: "fresh", state: "implementing" },
+    ]);
+  });
+
   it("resume-needed — a review is the cheapest way to find out what the worktree holds", () => {
     expect(onStalled(entry({ state: "resume-needed", stage: null }), true, cfg)).toEqual([
       { kind: "dispatch", stage: "code-review", mode: "fresh", state: "code-reviewing" },
@@ -726,7 +770,6 @@ describe("Step 3: the cleanup list", () => {
     expect(
       onPullRequest(entry({ state: "merged", stage: null, pr: 7 }), null, null, cfg, NOW),
     ).toEqual([
-      // prettier-ignore
       { kind: "remove-worktree", remote: true },
       { kind: "release", to: "done", reason: "merged as #7" },
       { kind: "set", state: "done", stage: "none" },
@@ -749,6 +792,18 @@ describe("Step 3: the cleanup list", () => {
       { kind: "remove-worktree", remote: true },
       { kind: "release", to: "blocked", reason: "pull request #7 closed without merge" },
       { kind: "set", state: "blocked", pr: "none", stage: "none" },
+    ]);
+  });
+
+  it("blocked with its pull request still open — the remote branch stays, so no cleanup closes a PR", () => {
+    // Wall clock, a review block or needs-human during a CI fix round: the entry is blocked
+    // while its pull request is open, and deleting the branch would close it.
+    const e = entry({ state: "blocked", stage: null, pr: 7, lastError: "wall clock: implement" });
+    expect(onPullRequest(e, open(), null, cfg, NOW)).toEqual([
+      { kind: "remove-worktree", remote: false },
+      { kind: "release", to: "blocked", reason: "wall clock: implement" },
+      { kind: "set", state: "blocked", pr: "none", stage: "none" },
+      { kind: "note", text: "the remote branch was kept: pull request #7 is still open" },
     ]);
   });
 
@@ -807,7 +862,9 @@ describe("Step 3: pull requests with no running stage", () => {
     const e = prEntry({ attempts: { implement: 1, fix: 2, reviewRetry: 0, plan: 0 } });
     const run = { url: "https://github.com/acme/widgets/actions/runs/9", log: "" };
     const actions = onPullRequest(e, open(), verdictOf([node("test", "FAILURE")], run), cfg, NOW); // prettier-ignore
-    expect(kinds(actions)).toEqual(["set", "release", "comment"]);
+    expect(kinds(actions)).toEqual(["set", "remove-worktree", "release", "comment"]);
+    // The worktree and the local branch go; the pull request keeps its remote branch.
+    expect(one(actions, "remove-worktree").remote).toBe(false);
     expect(one(actions, "release").reason).toMatch(/^gates red after 2 fix rounds — if wrong, /);
     expect(one(actions, "comment").body).toContain(run.url);
   });
@@ -825,15 +882,28 @@ describe("Step 3: pull requests with no running stage", () => {
   it("check 2 fail naming only 'not reported' or 'skipped' checks, 20 minutes on the PR's own clock — no gate run", () => {
     for (const rollup of [[node("lint", "SUCCESS")], [node("test", "SKIPPED")]]) {
       const actions = onPullRequest(prEntry(), open(21), verdictOf(rollup), cfg, NOW);
-      expect(kinds(actions), JSON.stringify(rollup)).toEqual(["set", "release", "comment"]);
+      expect(kinds(actions), JSON.stringify(rollup)).toEqual(["set", "remove-worktree", "release", "comment"]); // prettier-ignore
+      expect(one(actions, "remove-worktree").remote).toBe(false);
       expect(one(actions, "release").reason).toMatch(/^no gate run for abc1234 — if wrong, /);
     }
   });
 
   it("check 2 fail with an empty rollup, 20 minutes on the PR's own clock — no gate run; before that, wait", () => {
-    expect(kinds(onPullRequest(prEntry(), open(21), verdictOf([]), cfg, NOW))).toEqual(["set", "release", "comment"]); // prettier-ignore
+    expect(kinds(onPullRequest(prEntry(), open(21), verdictOf([]), cfg, NOW))).toEqual(["set", "remove-worktree", "release", "comment"]); // prettier-ignore
     // The pull request's own clock decides, not the entry's: 19 minutes is still waiting.
     expect(kinds(onPullRequest(prEntry(), open(19), verdictOf([]), cfg, NOW))).toEqual(["set"]);
+  });
+
+  it("an implement a limit interrupted in fixing-ci — resumed, not answered with a new fix round", () => {
+    const e = prEntry({ state: "fixing-ci", limitedStage: "implement", attempts: { implement: 1, fix: 2, reviewRetry: 0, plan: 0 } }); // prettier-ignore
+    // Red gates and the fix cap spent: still a resume, no label, no counter, no release.
+    expect(onPullRequest(e, open(), verdictOf([node("test", "FAILURE")], null), cfg, NOW)).toEqual([
+      // prettier-ignore
+      { kind: "dispatch", stage: "implement", mode: "resume", state: "fixing-ci" },
+    ]);
+    expect(onPullRequest(e, open(), null, cfg, NOW)).toEqual([
+      { kind: "dispatch", stage: "implement", mode: "resume", state: "fixing-ci" },
+    ]);
   });
 
   it("never produces a merge: every action of every verdict is one the union names", () => {
@@ -848,17 +918,26 @@ describe("Step 3: pull requests with no running stage", () => {
 // --- action failures, triage, Step 4, the delay table, the decision line ---------------
 
 describe("a failed action releases blocked quoting it", () => {
-  it("the retry label could not be applied — release blocked quoting the edit's error", () => {
-    const actions = onActionFailed(entry(), { kind: "label", add: "agent-retry-1" }, { message: "gh: HTTP 502" }); // prettier-ignore
-    expect(kinds(actions ?? [])).toEqual(["release", "set"]);
-    expect(one(actions ?? [], "release").reason).toMatch(/agent-retry-1.*gh: HTTP 502/);
+  it("the retry label could not be applied — release blocked quoting the edit's error, and no blocked transition", () => {
+    const actions = onActionFailed(entry({ state: "code-reviewing" }), { kind: "label", add: "agent-retry-1" }, { message: "gh: HTTP 502" }); // prettier-ignore
+    // The release only, as the source says; the stage record ends in place (R51). A `blocked`
+    // transition would send the entry to the cleanup, whose branch deletion closes a PR.
+    expect(actions).toEqual([
+      { kind: "release", to: "blocked", reason: expect.stringMatching(/agent-retry-1.*gh: HTTP 502/) }, // prettier-ignore
+      { kind: "set", state: "code-reviewing", stage: "none" },
+    ]);
+    // A CI fix round's label has no stage to end: the release is all.
+    const ci = onActionFailed(entry({ state: "pr-open", stage: null }), { kind: "label", add: "agent-fix-1" }, { message: "x" }); // prettier-ignore
+    expect(kinds(ci ?? [])).toEqual(["release"]);
   });
 
-  it("publish exit 3 — release blocked 'rebase conflict'; any other failure quotes the output", () => {
-    const conflict = onActionFailed(entry(), { kind: "publish", update: false }, { message: "CONFLICT", rebaseConflict: true }); // prettier-ignore
+  it("publish exit 3 — release blocked 'rebase conflict'; any other failure quotes the output; no blocked transition", () => {
+    const conflict = onActionFailed(entry({ state: "code-reviewing" }), { kind: "publish", update: false }, { message: "CONFLICT", rebaseConflict: true }); // prettier-ignore
     expect(one(conflict ?? [], "release").reason).toMatch(/^rebase conflict — if wrong, /);
+    expect(ofKind(conflict ?? [], "set")).toEqual([{ kind: "set", state: "code-reviewing", stage: "none" }]); // prettier-ignore
     const other = onActionFailed(entry(), { kind: "publish", update: false }, { message: "the diff touches forbidden paths" }); // prettier-ignore
     expect(one(other ?? [], "release").reason).toMatch(/^publish failed: the diff touches forbidden paths — if wrong, /); // prettier-ignore
+    expect(ofKind(other ?? [], "set").some((a) => a.state === "blocked")).toBe(false);
   });
 
   it("any other action's failure is not the table's to handle", () => {
@@ -881,7 +960,6 @@ describe("triage results are applied by the engine (design § 10)", () => {
   it("needs-shaping — apply the needs-shaping label and post the comment", () => {
     expect(onTriage(triage("needs-shaping", "Proposed acceptance criteria"), "ready", cfg)).toEqual(
       [
-        // prettier-ignore
         { kind: "label", add: "needs-shaping" },
         { kind: "comment", body: `${triageMarker("needs-shaping")}\nProposed acceptance criteria` },
       ],

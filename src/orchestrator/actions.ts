@@ -310,6 +310,7 @@ function setEntry(ctx: TickCtx, issue: number, a: Extract<Action, { kind: "set" 
       if (a.error !== undefined) patch.lastError = a.error;
       if (a.pr === "none") patch.pr = null;
       if (a.canMerge !== undefined) patch.lastCanMerge = a.canMerge;
+      if (a.limitedStage !== undefined) patch.limitedStage = a.limitedStage;
       if (a.bump) {
         const attempts = { ...before.attempts };
         attempts[BUMP[a.bump]] += 1;
@@ -360,10 +361,11 @@ function dispatch(
 ): string[] {
   const lines: string[] = [];
   const before = current(ctx, issue);
-  // The source's "late report whose stage was already decided is filed aside, not decided
-  // again": a report still in the worktree when a fresh or fix run starts belongs to a round
-  // that is over. Left there it would be read as this run's; numbered into the series it
-  // would be read as a round. A resumed stage keeps its report (it may have finished it).
+  // The source's "late report ... is filed aside, not decided again": a report still in the
+  // worktree when a fresh or fix run starts is an earlier run's — decided, or given up on (a
+  // stopped review that was retried, a stage a limit interrupted). Left there it would be read
+  // as this run's; numbered into the series it would be read as a round. A resumed stage keeps
+  // its report (it may have finished it).
   if (
     a.mode !== "resume" &&
     before.worktree &&
@@ -371,7 +373,7 @@ function dispatch(
   ) {
     const late = archiveReport(ctx.root, before, a.stage, {}, undefined, { late: true });
     if (late) {
-      ctx.notes(issue, "late report filed aside: its round was already decided");
+      ctx.notes(issue, "an earlier run's report filed aside: this run writes its own");
       lines.push(`late report filed aside at ${late}`);
     }
   }
@@ -389,7 +391,9 @@ function dispatch(
     (l) => {
       const was = l.issues[String(issue)];
       if (!was) throw new Error(`#${issue} has no ledger entry to dispatch ${a.stage} for`);
-      transition(l, issue, a.state, { stage: record }, now);
+      // Any dispatch ends a limit's interruption: the stage it marked runs again, or another
+      // one replaced it.
+      transition(l, issue, a.state, { stage: record, limitedStage: null }, now);
       appendNoteBestEffort(
         ctx.root,
         issue,
@@ -544,8 +548,16 @@ export function describe(a: Action): string {
  * Execute a row's actions in order. A failure the table answers (a label that could not be
  * applied, a worktree that could not be recreated, a publish that refused) runs its answer
  * instead of the rest; any other failure is thrown to the tick, which notes it.
+ *
+ * `answerFailures: false` throws every failure: the table's answers release a claimed issue,
+ * and a caller with no claim (triage) must not have one released.
  */
-export async function execute(ctx: TickCtx, issue: number, actions: Action[]): Promise<string[]> {
+export async function execute(
+  ctx: TickCtx,
+  issue: number,
+  actions: Action[],
+  opts: { answerFailures?: boolean } = {},
+): Promise<string[]> {
   const d = engineDeps(ctx);
   const done: string[] = [];
   for (const action of actions) {
@@ -553,6 +565,7 @@ export async function execute(ctx: TickCtx, issue: number, actions: Action[]): P
       const extra = await run(ctx, d, issue, action);
       done.push(describe(action), ...extra);
     } catch (error) {
+      if (opts.answerFailures === false) throw error;
       const message = error instanceof Error ? error.message : String(error);
       const entry = loadLedger(ctx.root).issues[String(issue)];
       const follow = onActionFailed(
@@ -707,6 +720,14 @@ export async function triageIssue(ctx: TickCtx, n: number): Promise<TriageOutcom
     return { decision: "failed", reason, actions: [] };
   }
   const actions = onTriage(triage, previousTriageDecision(view.comments), ctx.cfg);
-  await execute(ctx, n, actions);
+  try {
+    await execute(ctx, n, actions, { answerFailures: false });
+  } catch (error) {
+    // Nobody claimed this issue: a failed label or comment is noted and reported, never
+    // answered with a release or a ledger entry.
+    const reason = `applying the ${triage.decision} result failed: ${foldNote(error instanceof Error ? error.message : String(error))}`;
+    ctx.notes(n, `triage: ${reason}`);
+    return { decision: "failed", reason, actions };
+  }
   return { decision: triage.decision, reason: triage.reason, actions };
 }
