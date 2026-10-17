@@ -519,6 +519,8 @@ describe("publish, the step from a reviewed worktree to a pull request", () => {
     const stdin: Record<string, string> = {};
     const answers: Record<string, { status?: number; stdout?: string }> = {
       "git -c core.quotePath=false fetch": {},
+      // One git directory for the root and the worktree alike (F9).
+      "git rev-parse --git-common-dir": { stdout: "/repo/.git\n" },
       "git -c core.quotePath=false rev-parse HEAD": { stdout: "abc123\n" },
       "git rebase": {},
       "git merge-base --is-ancestor": {},
@@ -709,6 +711,21 @@ describe("publish, the step from a reviewed worktree to a pull request", () => {
       ).toThrow(/refusing to push/);
       expect(pushes(f.calls)).toEqual([]);
     }
+  });
+
+  // F9: the fetch, the rebase and the push carry the engine's credentials; a worktree whose
+  // `.git` a stage pointed at another git directory gets none of them.
+  it("refuses before the fetch when the worktree's git directory is not the project's", () => {
+    const { root, wt } = setup();
+    const f = fake();
+    const exec: Exec = (cmd, args, o) =>
+      cmd === "git" && args.includes("--git-common-dir") && o?.cwd === wt
+        ? { status: 0, stdout: "/elsewhere/.git\n", stderr: "" }
+        : f.exec(cmd, args, o);
+    expect(() =>
+      publish(9, false, { exec, forge: new Forge("o/r", exec), root, cfg, now }),
+    ).toThrow(/uses the git directory .*elsewhere.*not this project's .*refusing to push/);
+    expect(f.calls.filter((c) => / (fetch|rebase|push) /.test(` ${c} `))).toEqual([]);
   });
 
   // R72: what the engine placed in the worktree never leaves it, whatever the project's

@@ -17,6 +17,7 @@ import {
   ensureEngineExcludes,
   EXCLUDE_BEGIN,
   EXCLUDE_END,
+  foreignGitDir,
   namesFor,
   parseCreateArgs,
   parseWorktrees,
@@ -248,6 +249,25 @@ describe("create and remove, against a real temporary repository", () => {
     );
     expect(existsSync(wtDir(root, "agent+2-copy-fails"))).toBe(false);
     expect(sh(root, "branch", "--list", "agent/2-copy-fails")).toBe("");
+  }, 60_000);
+
+  // F9: before the engine fetches, rebases or pushes in a worktree, git is asked which git
+  // directory the worktree uses; a `.git` file a stage pointed elsewhere is refused.
+  it("tells a worktree of this project from one whose .git points at another git directory", () => {
+    const { tmp, root } = repo("autoclaude-wt-gitdir-");
+    const made = make(root, 15, "Git dir", { cfg: withRoot(".autoclaude/worktrees", []) });
+    expect(foreignGitDir(root, made.worktree)).toBeNull();
+    const other = join(tmp, "other");
+    sh(tmp, "init", "-b", "develop", other);
+    // Replaced rather than overwritten: git marks the file hidden on Windows, and a hidden file
+    // cannot be opened for truncation there.
+    rmSync(join(made.worktree, ".git"));
+    writeFileSync(join(made.worktree, ".git"), `gitdir: ${join(other, ".git")}\n`);
+    expect(foreignGitDir(root, made.worktree)).toMatch(
+      /uses the git directory .*other.*not this project's/,
+    );
+    rmSync(made.worktree, { recursive: true, force: true });
+    removeWorktree(root, 15, cfg, { deleteRemote: false });
   }, 60_000);
 
   // R72: the engine's own paths are ignored in every worktree through the shared exclude file,

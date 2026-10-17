@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import type { LedgerEntry } from "../../engine/ledger/ledger.js";
 import { classifyOptions, reportPath } from "../../engine/review/reports.js";
 import { normaliseEvidence } from "../../engine/review/rules.js";
+import { foreignGitDir } from "../../engine/worktree.js";
 import type { Dispatch } from "../../prompts/dispatch.js";
 import { prefetchIssue } from "../prefetch.js";
 import type { OrchestratorCtx } from "../stage.js";
@@ -52,7 +53,10 @@ export async function runPlanReview(
     });
   };
 
-  // The engine fetches; a stage never does.
+  // The engine fetches; a stage never does. Not into a git directory a stage chose by rewriting
+  // the worktree's `.git` (F9).
+  const foreign = foreignGitDir(ctx.root, worktree, ctx.exec);
+  if (foreign !== null) return stopped(foreign);
   const fetched = ctx.exec("git", ["fetch", cfg.forge.remote, cfg.branches.integration], {
     cwd: worktree,
   });

@@ -69,6 +69,9 @@ function rig(edit?: (cfg: ProjectConfig) => void): Rig {
     comments: [{ author: { login: "octo" }, body: "A comment", createdAt: "2026-01-02T00:00:00Z" }],
   };
   const exec: Exec = (cmd, args, opts) => {
+    // One git directory, whichever checkout asks (F9).
+    if (cmd === "git" && args.includes("--git-common-dir"))
+      return { status: 0, stdout: `${join(root, ".git")}\n`, stderr: "" };
     if (cmd === "git" && args[0] === "fetch") {
       order.push("fetch");
       fetches.push({ args, cwd: opts?.cwd });
@@ -378,7 +381,7 @@ describe("runStage", () => {
     const failing: OrchestratorCtx = {
       ...r.ctx,
       exec: (cmd, args, o) =>
-        cmd === "git"
+        cmd === "git" && args[0] === "fetch"
           ? { status: 128, stdout: "", stderr: "no network" }
           : r.ctx.exec(cmd, args, o),
     };
@@ -386,6 +389,31 @@ describe("runStage", () => {
     expect(out.kind).toBe("no-report");
     expect(rt.requests).toHaveLength(0);
     expect(r.notes.join("\n")).toMatch(/fetch.*no network/is);
+  });
+
+  // F9: a stage that rewrote the worktree's `.git` would point the engine's credentialed fetch
+  // at a git directory of its choosing.
+  it("neither fetches nor spawns in a worktree whose git directory is not the project's", async () => {
+    const r = rig();
+    const rt = r.runtime();
+    const elsewhere = join(r.root, "..", "elsewhere.git");
+    const fetched: string[] = [];
+    const redirected: OrchestratorCtx = {
+      ...r.ctx,
+      exec: (cmd, args, o) => {
+        if (cmd === "git" && args.includes("--git-common-dir") && o?.cwd === r.worktree)
+          return { status: 0, stdout: `${elsewhere}\n`, stderr: "" };
+        if (cmd === "git" && args[0] === "fetch") fetched.push(o?.cwd ?? "");
+        return r.ctx.exec(cmd, args, o);
+      },
+    };
+    const out = await runStage(redirected, entryOf(r), "implement", "fresh");
+    expect(out.kind).toBe("no-report");
+    expect(fetched).toEqual([]);
+    expect(rt.requests).toHaveLength(0);
+    expect(r.notes.join("\n")).toMatch(
+      /uses the git directory .*elsewhere\.git, not this project's/,
+    );
   });
 });
 

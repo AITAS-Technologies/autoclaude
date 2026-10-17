@@ -212,6 +212,23 @@ describe("claudeSettings", () => {
     expect(d).not.toContain("Edit(//home/u/work tree/ci/*.yml/**)");
   });
 
+  // F9: the worktree's `.git` names the git directory the engine's credentialed fetch, rebase
+  // and push run against. Both spellings, for both writing tools, in a read-only stage too.
+  it("denies writing the worktree's .git, as a file and as a directory", () => {
+    for (const readOnly of [false, true]) {
+      const d = claudeSettings(config(), wt, "ac", "linux", { readOnly }) as {
+        permissions: { deny: string[] };
+      };
+      for (const r of [
+        "Edit(//home/u/work tree/.git)",
+        "Edit(//home/u/work tree/.git/**)",
+        "Write(//home/u/work tree/.git)",
+        "Write(//home/u/work tree/.git/**)",
+      ])
+        expect(d.permissions.deny, `${r} readOnly=${readOnly}`).toContain(r);
+    }
+  });
+
   it("gives the hook a timeout above the guard's watchdog", () => {
     expect(settings(wt).hooks.PreToolUse[0]!.hooks[0]).toMatchObject({ timeout: 30 });
   });

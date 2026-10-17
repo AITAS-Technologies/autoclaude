@@ -227,6 +227,9 @@ export function claudeSettings(
     // A stage must not write project Claude settings (R44).
     `Edit(${root}/.claude/**)`,
     `Write(${root}/.claude/**)`,
+    // Nor the worktree's `.git`, a file naming the git directory the engine's credentialed
+    // fetch, rebase and push run against (F9). Both readings: the file, and a directory there.
+    ...[".git", ".git/**"].flatMap((p) => [`Edit(${root}/${p})`, `Write(${root}/${p})`]),
     ...cfg.forbiddenPaths.flatMap((g) => {
       // A path without glob characters names a file or a directory: deny both readings.
       const dir = g.replace(/\/+$/, "");

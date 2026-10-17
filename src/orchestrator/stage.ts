@@ -19,6 +19,7 @@ import type { ProjectConfig, Runtime, StageSpec } from "../config/types.js";
 import { bootstrapWorktree } from "../engine/bootstrap.js";
 import { runDir as issueRunsDir, updateLedger, type LedgerEntry } from "../engine/ledger/ledger.js";
 import { reportPath } from "../engine/review/reports.js";
+import { foreignGitDir } from "../engine/worktree.js";
 import type { Exec, Forge } from "../forge/github.js";
 import { processStartTime } from "../platform/kill.js";
 import { writeDispatch, type Dispatch } from "../prompts/dispatch.js";
@@ -134,6 +135,9 @@ export async function runStage(
     adapter = ctx.runtimes(spec.runtime);
 
     if (!triage) {
+      // Not into a git directory a stage chose by rewriting the worktree's `.git` (F9).
+      const foreign = foreignGitDir(root, worktree, ctx.exec);
+      if (foreign !== null) return stopped(`${stage}: ${foreign}`);
       // The engine fetches; a stage never does. A stage on a stale base is worse than no stage.
       const f = ctx.exec("git", ["fetch", cfg.forge.remote, cfg.branches.integration], {
         cwd: worktree,

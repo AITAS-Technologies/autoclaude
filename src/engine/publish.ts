@@ -44,6 +44,7 @@ import {
   type LedgerEntry,
 } from "./ledger/ledger.js";
 import { isRebasedOnto } from "./rebased.js";
+import { foreignGitDir } from "./worktree.js";
 import { decide, previousReport, type Decision } from "./review/decision.js";
 import {
   classifyOptions,
@@ -608,7 +609,11 @@ export function publish(issue: number, update: boolean, deps: PublishDeps): Publ
     );
   }
 
-  // 3. Rebase onto the current integration tip, and prove it.
+  // 3. Rebase onto the current integration tip, and prove it. Not in a worktree whose `.git` a
+  //    stage pointed elsewhere: the fetch, the rebase and the push below carry the credentials
+  //    (F9).
+  const foreign = foreignGitDir(root, wt, exec);
+  if (foreign !== null) throw new Error(`issue ${issue}: ${foreign}; refusing to push`);
   gitIn(["fetch", remote, cfg.branches.integration, "--quiet"]);
   // The tip the review read: the fetch moves no branch of this worktree, and every gate
   // above it has already run, so nothing has touched HEAD since the report was written.

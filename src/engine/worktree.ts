@@ -23,7 +23,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ProjectConfig } from "../config/types.js";
 import { git, realExec, type Exec } from "../forge/github.js";
-import { toPosix } from "../platform/paths.js";
+import { samePath, toPosix } from "../platform/paths.js";
 import { branchPrefixFor, worktreeDirPrefix } from "./branch-names.js";
 // `review/rules.ts` imports a leaf module and nothing else, so this closes no loop, which
 // matters because `rules.ts` calls `escapeRegExp` at module scope.
@@ -392,6 +392,34 @@ export function parseCreateArgs(rest: string[]): { title: string; replace: boole
     .trim();
   if (!title) throw new Error("create: the title after -- is empty");
   return { title, replace: options.includes("--replace") };
+}
+
+/**
+ * Why the engine must not run its fetch, rebase or push in `worktree`, or null when it may (F9).
+ *
+ * In a linked worktree `.git` is a file naming the git directory. A stage that rewrote it would
+ * point the engine's credentialed git calls, and the hooks and config those read, at a
+ * directory of the stage's choosing. So the common directory git resolves from the worktree
+ * has to be the project's own, compared as normalised paths. Every such call site asks here
+ * first; a reason is a refusal, and the entry goes the way of any failed step.
+ */
+export function foreignGitDir(
+  root: string,
+  worktree: string,
+  exec: Exec = realExec,
+): string | null {
+  const commonDir = (cwd: string): string | null => {
+    const r = exec("git", ["rev-parse", "--git-common-dir"], { cwd });
+    const named = r.stdout.trim();
+    return r.status === 0 && named ? resolve(cwd, named) : null;
+  };
+  const ours = commonDir(root);
+  if (ours === null) return `git cannot say which git directory ${root} uses`;
+  const theirs = commonDir(worktree);
+  if (theirs === null) return `git cannot say which git directory the worktree ${worktree} uses`;
+  if (!samePath(ours, theirs))
+    return `the worktree ${worktree} uses the git directory ${theirs}, not this project's ${ours} (its .git was changed); the engine will not fetch, rebase or push there`;
+  return null;
 }
 
 export const EXCLUDE_BEGIN = "# autoclaude: engine-owned paths (begin)";

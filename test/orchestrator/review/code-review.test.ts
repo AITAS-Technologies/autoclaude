@@ -120,7 +120,13 @@ describe("runCodeReview", () => {
   it("fetches, then diffs the worktree against <remote>/<integration> before any process", async () => {
     const { r } = setup();
     await review(r);
-    const git = r.calls.filter((c) => c.cmd === "git");
+    // F9: the worktree's git directory is checked first, then the fetch runs there.
+    const all = r.calls.filter((c) => c.cmd === "git");
+    expect(all.slice(0, 2).map((c) => c.args)).toEqual([
+      ["rev-parse", "--git-common-dir"],
+      ["rev-parse", "--git-common-dir"],
+    ]);
+    const git = all.slice(2);
     expect(git[0]!.args).toEqual(["fetch", "origin", "develop"]);
     expect(git[0]!.cwd).toBe(r.worktree);
     const diff = git.find((c) => c.args.includes("diff"))!;
