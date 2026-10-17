@@ -95,7 +95,16 @@ export interface Verdict {
   name: string;
   result: "pass" | "fail" | "unavailable";
   detail: string;
+  /**
+   * Check 2 only: the checks that did report (at most `REPORTED_SHOWN`), when not one of them
+   * carries a required name. A `requiredChecks` entry that never matches (a matrix job reports
+   * as `test (ubuntu-latest)`, never as `test`) looks like silent gates; these say otherwise.
+   */
+  reported?: string[];
 }
+
+/** How many reported check names a verdict carries for a human to compare with `requiredChecks`. */
+export const REPORTED_SHOWN = 10;
 
 /**
  * The required checks judged by name, one problem per name or none. After a re-run
@@ -472,6 +481,12 @@ export function evaluate(
       problems.length === 0,
       problems.length ? problems.join(", ") : `${cfg.requiredChecks.join(", ")} all SUCCESS`,
     );
+    // Checks reported, and none of them by a required name: say which did, so the user can
+    // correct `requiredChecks` rather than look for a skip marker that is not there.
+    const names = [...new Set(rollup.map((r) => r.name))];
+    const check2 = checks[checks.length - 1];
+    if (check2 && !names.some((n) => cfg.requiredChecks.includes(n)))
+      check2.reported = names.slice(0, REPORTED_SHOWN);
   }
 
   const open = blockingFindings(review);
@@ -527,7 +542,9 @@ export function evaluate(
 /** The verdict as the table a human reads: one row per check, the id, result, name and detail. */
 export function renderVerdict(pr: number, v: ReturnType<typeof evaluate>): string {
   const rows = v.checks.map(
-    (c) => `${String(c.id).padStart(2)}  ${c.result.padEnd(11)} ${c.name.padEnd(36)} ${c.detail}`,
+    (c) =>
+      `${String(c.id).padStart(2)}  ${c.result.padEnd(11)} ${c.name.padEnd(36)} ${c.detail}` +
+      (c.reported ? `; reported instead: ${c.reported.join(", ")}` : ""),
   );
   return [`can-merge #${pr}: ${v.allowed ? "ALLOWED" : "REFUSED"}`, ...rows].join("\n");
 }

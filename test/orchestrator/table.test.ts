@@ -884,8 +884,32 @@ describe("Step 3: pull requests with no running stage", () => {
       const actions = onPullRequest(prEntry(), open(21), verdictOf(rollup), cfg, NOW);
       expect(kinds(actions), JSON.stringify(rollup)).toEqual(["set", "remove-worktree", "release", "comment"]); // prettier-ignore
       expect(one(actions, "remove-worktree").remote).toBe(false);
-      expect(one(actions, "release").reason).toMatch(/^no gate run for abc1234 — if wrong, /);
     }
+    const skipped = onPullRequest(prEntry(), open(21), verdictOf([node("test", "SKIPPED")]), cfg, NOW); // prettier-ignore
+    expect(one(skipped, "release").reason).toMatch(/^no gate run for abc1234 — if wrong, /);
+    expect(one(skipped, "comment").body).toMatch(/skip marker in the commit subject or a paths filter/); // prettier-ignore
+  });
+
+  // F11: a matrix job reports as `test (ubuntu-latest)`, never as `test`. Same actions, but the
+  // message names the checks that did report, so the user can correct `requiredChecks`.
+  it("check 2 silent while other checks reported under no required name — says which did report", () => {
+    const rollup = [node("test (ubuntu-latest)", "SUCCESS"), node("test (windows-latest)", "SUCCESS"), node("lint", "SUCCESS")]; // prettier-ignore
+    const actions = onPullRequest(prEntry(), open(21), verdictOf(rollup), cfg, NOW);
+    expect(kinds(actions)).toEqual(["set", "remove-worktree", "release", "comment"]);
+    expect(one(actions, "release").reason).toMatch(
+      /^no required check reported for abc1234, while test \(ubuntu-latest\), test \(windows-latest\), lint did: requiredChecks names checks CI does not report — if wrong, /,
+    );
+    const body = one(actions, "comment").body;
+    expect(body).toContain("None of the required checks (`test`) reported for abc1234");
+    expect(body).toContain("`test (ubuntu-latest)`, `test (windows-latest)`, `lint`");
+    expect(body).toContain("Correct `requiredChecks`");
+    expect(body).not.toMatch(/skip marker/);
+    // At most ten names are carried.
+    const many = Array.from({ length: 14 }, (_, i) => node(`job ${i}`, "SUCCESS"));
+    const v = verdictOf(many).checks.find((c) => c.id === 2);
+    expect(v?.reported).toHaveLength(10);
+    // A required name that did report (skipped) is the old case: no list.
+    expect(verdictOf([node("test", "SKIPPED"), node("lint", "SUCCESS")]).checks.find((c) => c.id === 2)?.reported).toBeUndefined(); // prettier-ignore
   });
 
   it("check 2 fail with an empty rollup, 20 minutes on the PR's own clock — no gate run; before that, wait", () => {

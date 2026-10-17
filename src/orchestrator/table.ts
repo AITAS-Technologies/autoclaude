@@ -740,6 +740,12 @@ export function onPullRequest(
   // The pull request's own clock: the entry's `updatedAt` moves on every tick.
   if (gates === "silent" && silentFor > GATES_SILENT_MS) {
     const sha = entry.pushedSha ?? "the pushed head";
+    // Other checks did report, under no required name: the likelier cause is `requiredChecks`
+    // naming a check CI never reports (a matrix job is `test (ubuntu-latest)`, never `test`).
+    const reported = verdict.checks.find((c) => c.id === 2)?.reported ?? [];
+    const misnamed = reported.length > 0;
+    const names = reported.map((n) => `\`${n}\``).join(", ");
+    const required = cfg.requiredChecks.map((n) => `\`${n}\``).join(", ");
     return [
       record,
       { kind: "remove-worktree", remote: false },
@@ -747,14 +753,18 @@ export function onPullRequest(
         kind: "release",
         to: "blocked",
         reason: costed(
-          `no gate run for ${sha}`,
+          misnamed
+            ? `no required check reported for ${sha}, while ${reported.join(", ")} did: requiredChecks names checks CI does not report`
+            : `no gate run for ${sha}`,
           "a pull request whose gates were only slow waits for a human",
         ),
       },
       {
         kind: "comment",
         marker,
-        body: `No gate run reported for ${sha} in 20 minutes (${detail}). A skip marker in the commit subject or a paths filter in the workflow keeps the gates from starting; a human decides whether to amend the subject or re-run them.`,
+        body: misnamed
+          ? `None of the required checks (${required}) reported for ${sha} in 20 minutes, while other checks did: ${names}. A name in \`requiredChecks\` has to equal a reported check's name exactly; a matrix job reports as \`name (value)\`. Correct \`requiredChecks\` in \`.autoclaude/config.json\`, or re-run the gates if the names are right.`
+          : `No gate run reported for ${sha} in 20 minutes (${detail}). A skip marker in the commit subject or a paths filter in the workflow keeps the gates from starting; a human decides whether to amend the subject or re-run them.`,
       },
     ];
   }
