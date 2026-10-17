@@ -6,3 +6,5 @@ test/fixtures/
 spikes/
 docs/spikes/
 .superpowers/
+# vendored text, kept as its source wrote it (see NOTICE)
+prompts/procedures/
