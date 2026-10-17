@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -7,7 +7,9 @@ import { control } from "../../src/engine/control.js";
 import type { Situation } from "../../src/engine/situation.js";
 import { Forge } from "../../src/forge/github.js";
 import { StageRegistry, type TickCtx } from "../../src/orchestrator/actions.js";
+import { acquireInstance } from "../../src/orchestrator/instance.js";
 import { runLoop } from "../../src/orchestrator/loop.js";
+import { tick } from "../../src/orchestrator/tick.js";
 import type { TickSummary } from "../../src/orchestrator/tick.js";
 import type { RuntimeAdapter, StageRequest, StageResult } from "../../src/runtimes/types.js";
 
@@ -160,20 +162,30 @@ describe("runLoop", () => {
     expect(logs.join("\n")).toMatch(/gh is down/);
   });
 
-  it("stops ticking on the first signal, waits for the stage, and returns when it ends", async () => {
+  it("drains on the first signal: no new dispatch, the finished stage is consumed, then it returns", async () => {
     const ctx = ctxFor();
     const first = new AbortController();
-    let ticks = 0;
+    let dispatched = 0;
+    let consumed = 0;
+    let ticksAfterSignal = 0;
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
     const loop = runLoop(ctx, first.signal, {
-      tick: async () => {
-        ticks++;
-        ctx.stages.start(ctx, 7, "implement", new Date().toISOString(), async () => {
-          await gate;
-          return noReport();
-        });
-        return summary({ running: [7] });
+      tick: async (_c, o) => {
+        if (o.noNewWork?.()) ticksAfterSignal++;
+        const task = ctx.stages.get(7);
+        if (task?.settled) {
+          ctx.stages.take(7);
+          consumed++;
+        }
+        if (!o.noNewWork?.() && dispatched === 0) {
+          dispatched++;
+          ctx.stages.start(ctx, 7, "implement", new Date().toISOString(), async () => {
+            await gate;
+            return noReport();
+          });
+        }
+        return summary({ running: ctx.stages.running() });
       },
     });
     await new Promise((r) => setTimeout(r, 50));
@@ -182,9 +194,74 @@ describe("runLoop", () => {
     void loop.then(() => (returned = true));
     await new Promise((r) => setTimeout(r, 100));
     expect(returned, "still waiting for the running stage").toBe(false);
+    expect(ticksAfterSignal, "the loop keeps ticking in no-new-work mode").toBeGreaterThan(0);
     release();
     await loop;
-    expect(ticks, "no tick after the signal").toBe(1);
+    expect(consumed, "a stage that finished after the signal was consumed").toBe(1);
+    expect(dispatched, "nothing was dispatched after the signal").toBe(1);
+  });
+
+  it("a foreign id in instance.json makes the loop stop taking work", async () => {
+    const ctx = ctxFor();
+    const first = new AbortController();
+    const h = acquireInstance(ctx.root, { heartbeatMs: 20, onLost: () => first.abort() });
+    const holds: boolean[] = [];
+    try {
+      const loop = runLoop(ctx, first.signal, {
+        tick: async (_c, o) => {
+          holds.push(o.noNewWork?.() ?? false);
+          return summary({ nextWakeMs: 30 });
+        },
+      });
+      await new Promise((r) => setTimeout(r, 60));
+      writeFileSync(
+        join(ctx.root, ".autoclaude", "state", "instance.json"),
+        JSON.stringify({ instance: "someone-else", pid: 1, heartbeatAt: new Date().toISOString() }),
+      );
+      await loop; // nothing runs: the drain ends at once
+      expect(first.signal.aborted).toBe(true);
+      expect(holds.at(-1), "the last tick ran in no-new-work mode").toBe(true);
+      expect(holds[0]).toBe(false);
+    } finally {
+      h.release();
+    }
+  });
+
+  describe("a real tick in no-new-work mode", () => {
+    const queued = (ctx: TickCtx): Situation => ({
+      ...emptySituation(ctx),
+      control: { paused: false, draining: false },
+      newWork: { allowed: true, reasons: [] } as unknown as Situation["newWork"],
+      queue: [{ number: 5, title: "Fix it" }],
+    });
+    const withCalls = (ctx: TickCtx) => {
+      const calls: string[] = [];
+      ctx.exec = (cmd, args) => {
+        calls.push(`${cmd} ${args.join(" ")}`);
+        return { status: 1, stdout: "", stderr: "stub" };
+      };
+      ctx.forge = new Forge("acme/widgets", ctx.exec);
+      return calls;
+    };
+
+    it("claims nothing when the flag is set, and does when it is not (positive control)", async () => {
+      const ctx = ctxFor(undefined, { situation: queued });
+      const calls = withCalls(ctx);
+      await tick(ctx, { noNewWork: () => true });
+      expect(calls).toEqual([]);
+      await tick(ctx, { noNewWork: () => false });
+      expect(calls.length, "without the flag the tick does try to claim").toBeGreaterThan(0);
+    });
+
+    it("re-asks the flag before the claim, inside the tick", async () => {
+      const ctx = ctxFor(undefined, { situation: queued });
+      const calls = withCalls(ctx);
+      let asked = 0;
+      // false for the earlier gates of the tick, true by the time Step 4 is about to claim
+      await tick(ctx, { noNewWork: () => ++asked >= 4 });
+      expect(asked).toBeGreaterThanOrEqual(4);
+      expect(calls).toEqual([]);
+    });
   });
 
   it("kills every child, review children included, on the second signal", async () => {
@@ -194,7 +271,8 @@ describe("runLoop", () => {
     const second = new AbortController();
     const loop = runLoop(ctx, first.signal, {
       force: second.signal,
-      tick: async () => {
+      tick: async (_c, o) => {
+        if (o.noNewWork?.()) return summary({ running: ctx.stages.running() });
         // A review: two processes (angle, scorer) behind one stage record.
         ctx.stages.start(ctx, 7, "code-review", new Date().toISOString(), async (tracked) => {
           const adapter = tracked.runtimes("claude");

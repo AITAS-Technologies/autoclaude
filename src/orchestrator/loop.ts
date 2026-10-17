@@ -2,22 +2,24 @@
  * The run loop: tick, then sleep until the earlier of the tick's next wake time and any stage's
  * exit, and tick again — until the tick says stop (draining with nothing running), or a signal.
  *
- * Shutdown has two steps, because a stage can run for an hour. The first signal (`signal`)
- * stops taking work: no further tick, the loop waits for what runs to finish. The second
- * (`opts.force`) kills every process the loop's stages started, review children included, and
- * returns. Whatever a stage left unconsumed is decided by the next start (the stage record
- * outlives its process; recovery and the tick's late-report rows read it).
+ * Shutdown has two steps, because a stage can run for an hour. The first signal (`signal`, or
+ * the heartbeat finding another instance) stops taking work: the loop keeps ticking so what
+ * finishes is settled, but `noNewWork` is asked before every dispatch, in-flight ticks
+ * included, and the loop returns once nothing runs. The second (`opts.force`) kills every
+ * process the loop's stages started, review children included, and returns. A finished
+ * outcome whose follow-up would dispatch stays unconsumed; the next start decides it (the
+ * stage record outlives its process; the tick's late-report rows read it).
  *
  * No ledger lock is held here: the tick takes it for short bodies only.
  */
 import type { TickCtx } from "./actions.js";
-import { tick, type TickSummary } from "./tick.js";
+import { tick, type TickOptions, type TickSummary } from "./tick.js";
 
 export interface LoopOptions {
   /** The second signal: kill the children and return. */
   force?: AbortSignal;
   /** Replaces `tick` (tests). */
-  tick?: (ctx: TickCtx) => Promise<TickSummary>;
+  tick?: (ctx: TickCtx, opts: TickOptions) => Promise<TickSummary>;
   /** Where a failed tick is reported. */
   log?: (message: string) => void;
   /** How long to wait after a failed tick (gh down, a truncated listing) before the next. */
@@ -57,23 +59,32 @@ export async function runLoop(
   const stages = ctx.stages;
   const onForce = () => void stages.stopAll();
   force.addEventListener("abort", onForce, { once: true });
+  // One exit waiter per mark, not one per idle iteration: the registry keeps every waiter it
+  // is handed until the next stage settles.
+  let waiter: { mark: number; until: Promise<void> } | null = null;
+  const exitAfter = (mark: number): Promise<void> => {
+    if (waiter === null || waiter.mark !== mark) waiter = { mark, until: stages.next(mark) };
+    return waiter.until;
+  };
+  /** Shutting down: the first signal, or a second one. */
+  const stopping = () => signal.aborted || force.aborted;
+  const done = () => stopping() && stages.running().length === 0;
   try {
-    while (!signal.aborted && !force.aborted) {
+    while (!force.aborted) {
       const mark = stages.settledCount;
       let wakeMs: number;
       try {
-        const summary = await run(ctx);
+        // After the first signal the tick still runs, to settle what finishes, but starts nothing.
+        const summary = await run(ctx, { noNewWork: stopping });
         if (summary.stop) return;
         wakeMs = summary.nextWakeMs;
       } catch (error) {
         log(`tick failed, trying again: ${(error as Error).message}`);
         wakeMs = opts.errorRetryMs ?? ERROR_RETRY_MS;
       }
-      await sleepUntil(wakeMs, stages.next(mark), [signal, force]);
-    }
-    // Shut down: take nothing more; let the running stages finish unless forced.
-    while (stages.running().length > 0 && !force.aborted) {
-      await sleepUntil(MAX_SLEEP_MS, stages.next(stages.settledCount), [force]);
+      if (done()) return;
+      const aborts = signal.aborted ? [force] : [signal, force];
+      await sleepUntil(wakeMs, exitAfter(mark), aborts);
     }
   } finally {
     force.removeEventListener("abort", onForce);

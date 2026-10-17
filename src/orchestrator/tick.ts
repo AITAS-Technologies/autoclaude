@@ -164,7 +164,17 @@ interface Run {
   touched: Set<number>;
   /** An active usage limit: dispatch nothing. */
   limited: boolean;
+  /** Shutting down: asked again before every dispatch, so an in-flight tick stops taking work. */
+  hold: () => boolean;
 }
+
+export interface TickOptions {
+  /** True while the loop is shutting down: settle what ran, start nothing new. */
+  noNewWork?: () => boolean;
+}
+
+/** Nothing may be dispatched now: a usage limit, or a shutdown in progress. */
+const held = (run: Run) => run.limited || run.hold();
 
 const why = (error: unknown) => foldNote(error instanceof Error ? error.message : String(error));
 
@@ -201,7 +211,7 @@ async function settle(run: Run, e: SituationIssue, stage: Stage): Promise<Action
       ? reviewDecisionFor(ctx, d, e.issue, stage)
       : null;
   const actions = onStageFinished(e, stage, outcome, decision, ctx.cfg, now);
-  if (run.limited && hasDispatch(actions)) {
+  if (held(run) && hasDispatch(actions)) {
     run.waiting.push(`#${e.issue}: ${stage} finished; what follows waits for the limit`);
     return null;
   }
@@ -236,6 +246,7 @@ async function step2b(run: Run, situation: Situation): Promise<void> {
   const ledger = loadLedger(run.ctx.root);
   for (const s of situation.stalled) {
     if (run.touched.has(s.issue)) continue;
+    if (held(run)) return;
     const e = situation.issues.find((i) => i.issue === s.issue);
     if (!e) continue;
     let actions: Action[];
@@ -283,7 +294,7 @@ async function step3(run: Run, situation: Situation, handOver: SituationIssue[])
     }
     const pr = { state: e.prState, updatedAt: e.prUpdatedAt };
     const actions = onPullRequest(e, pr, verdict, run.ctx.cfg, run.now);
-    if (run.limited && hasDispatch(actions)) {
+    if (held(run) && hasDispatch(actions)) {
       run.waiting.push(`#${e.issue}: a CI fix round waits for the limit`);
       continue;
     }
@@ -295,6 +306,7 @@ async function step3(run: Run, situation: Situation, handOver: SituationIssue[])
 async function step4(run: Run, situation: Situation): Promise<void> {
   let queue = situation.queue;
   for (;;) {
+    if (held(run)) return;
     const next = newWork({ ...situation, queue }, run.ctx.cfg);
     const item = next && queue.find((q) => q.number === next.issue);
     if (!item) return;
@@ -339,7 +351,7 @@ function step5(run: Run, draining: boolean): Omit<TickSummary, "changed" | "wait
   return { running, nextWakeMs: delay.ms, stop: delay.stop };
 }
 
-export async function tick(ctx: TickCtx): Promise<TickSummary> {
+export async function tick(ctx: TickCtx, opts: TickOptions = {}): Promise<TickSummary> {
   const d = engineDeps(ctx);
   const now = ctx.now();
   // Step 1.
@@ -353,6 +365,7 @@ export async function tick(ctx: TickCtx): Promise<TickSummary> {
     waiting: [],
     touched: new Set(),
     limited: future(situation.limitedUntil, now),
+    hold: opts.noNewWork ?? (() => false),
   };
 
   const handOver = await step2(run, situation.issues);
@@ -365,9 +378,10 @@ export async function tick(ctx: TickCtx): Promise<TickSummary> {
   if (draining) run.waiting.push("draining: finishing what runs, taking nothing new");
 
   // Paused or draining: Steps 2 and 3 only. Limited: dispatch nothing.
-  if (!run.limited && !paused && !draining) await step2b(run, situation);
+  if (run.hold()) run.waiting.push("shutting down: settling what ran, taking nothing new");
+  if (!held(run) && !paused && !draining) await step2b(run, situation);
   await step3(run, situation, handOver);
-  if (situation.newWork.allowed && !run.limited) await step4(run, situation);
+  if (situation.newWork.allowed && !held(run)) await step4(run, situation);
   else if (!situation.newWork.allowed)
     run.waiting.push(`no new work: ${situation.newWork.reasons.join("; ")}`);
   // Not taken over automatically in this phase.

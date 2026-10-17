@@ -6,11 +6,13 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ProjectConfig } from "../../src/config/types.js";
 import {
   emptyLedger,
@@ -22,6 +24,8 @@ import {
 import type { IssueView } from "../../src/forge/github.js";
 import { acquireInstance, recoverOrphans, sameProcess } from "../../src/orchestrator/instance.js";
 import { processStartTime } from "../../src/platform/kill.js";
+import { runSync } from "../../src/platform/spawn.js";
+import { childEnv } from "../helpers/child-env.js";
 
 const tmp: string[] = [];
 const children: ChildProcess[] = [];
@@ -280,5 +284,85 @@ describe("recoverOrphans", () => {
       expect(await recoverOrphans("unused", l, { startTime, kill })).toEqual([]);
     }
     expect(kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("acquireInstance, two processes racing on a stale file", () => {
+  const REPO = resolve(import.meta.dirname, "../..");
+  let build: string;
+
+  beforeAll(() => {
+    build = mkdtempSync(join(tmpdir(), "ac-instance-build-"));
+    tmp.push(build);
+    const tsc = join(REPO, "node_modules/typescript/bin/tsc");
+    const r = runSync(
+      process.execPath,
+      [tsc, "-p", "tsconfig.build.json", "--outDir", join(build, "dist"), "--incremental", "false"],
+      { cwd: REPO, env: childEnv() },
+    );
+    if (r.status !== 0) throw new Error(`tsc failed: ${r.stdout}${r.stderr}`);
+    writeFileSync(join(build, "package.json"), '{"type":"module"}');
+    symlinkSync(join(REPO, "node_modules"), join(build, "node_modules"), "junction");
+  }, 180_000);
+
+  it("lets exactly one win", async () => {
+    const root = project();
+    // A stale file: a dead pid and an old heartbeat.
+    mkdirSync(join(root, ".autoclaude", "state"), { recursive: true });
+    writeFileSync(
+      stateFile(root),
+      JSON.stringify({ instance: "dead", pid: 2_147_483_000, heartbeatAt: "2020-01-01T00:00:00Z" }),
+    );
+    const entry = pathToFileURL(join(build, "dist/orchestrator/instance.js")).href;
+    const go = Date.now() + 3000;
+    // Both spin until the same instant, then race; the winner holds the file for a while so
+    // the loser meets a live, fresh owner.
+    const script = `
+      const { acquireInstance } = await import(${JSON.stringify(entry)});
+      while (Date.now() < ${go}) {}
+      try {
+        const h = acquireInstance(${JSON.stringify(root)});
+        console.log("WON");
+        await new Promise((r) => setTimeout(r, 6000));
+        h.release();
+      } catch (e) {
+        console.log("LOST " + e.message);
+      }`;
+    const run = () =>
+      new Promise<string>((done) => {
+        const c = spawn(process.execPath, ["--input-type=module", "-e", script], {
+          stdio: ["ignore", "pipe", "ignore"],
+          windowsHide: true,
+          env: childEnv(),
+        });
+        children.push(c);
+        let out = "";
+        c.stdout!.on("data", (d) => (out += d));
+        c.on("close", () => done(out));
+      });
+    const outs = await Promise.all([run(), run()]);
+    const won = outs.filter((o) => o.startsWith("WON")).length;
+    const lost = outs.filter((o) => /^LOST .*already running/.test(o)).length;
+    expect({ won, lost }).toEqual({ won: 1, lost: 1 });
+  }, 60_000);
+});
+
+describe("the heartbeat finding another instance", () => {
+  it("calls onLost once, stops beating, and leaves the other's file alone", async () => {
+    const root = project();
+    const lost = vi.fn();
+    const h = acquireInstance(root, { heartbeatMs: 20, onLost: lost });
+    const foreign = JSON.stringify({
+      instance: "other",
+      pid: 1,
+      heartbeatAt: "2026-03-01T00:00:00Z",
+    });
+    writeFileSync(stateFile(root), foreign);
+    expect(await waitFor(() => lost.mock.calls.length > 0)).toBe(true);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(readFileSync(stateFile(root), "utf8")).toBe(foreign);
+    h.release();
+    expect(readFileSync(stateFile(root), "utf8"), "release leaves a foreign file").toBe(foreign);
   });
 });

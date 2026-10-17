@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { STATE_DIR } from "../engine/ledger/lock.js";
-import { renameWithRetry, type Ledger } from "../engine/ledger/ledger.js";
+import { renameWithRetry, withLedgerLock, type Ledger } from "../engine/ledger/ledger.js";
 import { killTree, processStartTime } from "../platform/kill.js";
 
 export const HEARTBEAT_MS = 30_000;
@@ -33,6 +33,8 @@ export interface InstanceDeps {
   alive: (pid: number) => boolean;
   heartbeatMs: number;
   newId: () => string;
+  /** Called once when the heartbeat finds another instance in the file. */
+  onLost: () => void;
 }
 
 const defaults = (): InstanceDeps => ({
@@ -41,6 +43,7 @@ const defaults = (): InstanceDeps => ({
   alive: (pid) => processStartTime(pid) !== null,
   heartbeatMs: HEARTBEAT_MS,
   newId: () => randomUUID(),
+  onLost: () => {},
 });
 
 const instancePath = (root: string): string => join(root, STATE_DIR, "instance.json");
@@ -79,31 +82,39 @@ export function acquireInstance(
   overrides: Partial<InstanceDeps> = {},
 ): { instance: string; release(): void } {
   const d = { ...defaults(), ...overrides };
-  const held = readInstance(root);
-  if (held !== null) {
-    const beat = Date.parse(held.heartbeatAt);
-    const fresh = Number.isFinite(beat) && d.now().getTime() - beat <= STALE_HEARTBEAT_MS;
-    if (fresh && d.alive(held.pid)) {
-      throw new Error(
-        `autoclaude is already running for this project (pid ${held.pid}, instance ${held.instance}, heartbeat ${held.heartbeatAt})`,
-      );
-    }
-  }
   const instance = d.newId();
   const beatNow = () =>
     writeInstance(root, { instance, pid: d.pid, heartbeatAt: d.now().toISOString() }, d.pid);
-  beatNow();
-  // Two processes that took over the same dead file at once: the later rename wins, and the
-  // earlier one finds another id here and gives up.
-  if (readInstance(root)?.instance !== instance) {
-    throw new Error("autoclaude is already running for this project (lost the race for it)");
-  }
+  // Read-check-write under the ledger lock: of two processes that both saw a stale or absent
+  // file, the second one reads the first one's fresh heartbeat and refuses. The body is short
+  // (one liveness probe, one rename).
+  mkdirSync(join(root, STATE_DIR), { recursive: true });
+  withLedgerLock(root, () => {
+    const held = readInstance(root);
+    if (held !== null) {
+      const beat = Date.parse(held.heartbeatAt);
+      const fresh = Number.isFinite(beat) && d.now().getTime() - beat <= STALE_HEARTBEAT_MS;
+      if (fresh && d.alive(held.pid)) {
+        throw new Error(
+          `autoclaude is already running for this project (pid ${held.pid}, instance ${held.instance}, heartbeat ${held.heartbeatAt})`,
+        );
+      }
+    }
+    beatNow();
+  });
 
   let timer: NodeJS.Timeout | null = setInterval(() => {
     try {
-      // Never resurrect a file another instance took over.
       const now = readInstance(root);
-      if (now === null || now.instance === instance) beatNow();
+      if (now !== null && now.instance !== instance) {
+        // Another instance took the project over (this process slept past 120 s): never
+        // write over it, and tell the loop to stop taking work.
+        if (timer !== null) clearInterval(timer);
+        timer = null;
+        d.onLost();
+        return;
+      }
+      beatNow();
     } catch {
       /* a failed beat is retried at the next one; the file ages out only after 120 s */
     }

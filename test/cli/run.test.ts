@@ -83,6 +83,51 @@ describe("autoclaude run", () => {
     expect(existsSync(instanceFile(r.root))).toBe(false);
   });
 
+  it("--once settles only: it claims nothing even with an issue queued", async () => {
+    const calls: string[] = [];
+    const r = rig((ctx) => ({
+      ...draining(ctx),
+      control: { paused: false, draining: false },
+      newWork: { allowed: true, reasons: [] } as unknown as Situation["newWork"],
+      queue: [{ number: 5, title: "Fix it" }],
+    }));
+    const base = r.deps.context;
+    r.deps.context = (root, instance) => {
+      const ctx = base(root, instance);
+      ctx.exec = (cmd, args) => {
+        calls.push(`${cmd} ${args.join(" ")}`);
+        return { status: 1, stdout: "", stderr: "stub" };
+      };
+      ctx.forge = new Forge("acme/widgets", ctx.exec);
+      return ctx;
+    };
+    expect(await runVerb(["--once"], r.io, "x", r.deps)).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it("a signal during --once still releases the instance", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((res) => (release = res));
+    const r = rig(() => {
+      throw new Error("unused");
+    });
+    r.deps.context = ((base) => (root: string, instance: string) => {
+      const ctx = base(root, instance);
+      ctx.deps = {
+        situation: (c) => {
+          r.signals.emit("SIGINT"); // Ctrl-C arrives mid-tick
+          release();
+          return draining(c);
+        },
+      };
+      return ctx;
+    })(r.deps.context);
+    expect(await runVerb(["--once"], r.io, "x", r.deps)).toBe(0);
+    await gate;
+    expect(existsSync(instanceFile(r.root))).toBe(false);
+    expect(r.signals.listenerCount("SIGINT")).toBe(0);
+  });
+
   it("--once exits 1 when the tick fails, and says why", async () => {
     const r = rig(() => {
       throw new Error("gh is down");
