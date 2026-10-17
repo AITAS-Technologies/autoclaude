@@ -15,14 +15,20 @@ export const SETTINGS_FILE = "settings.json";
 export const STDOUT_FILE = "stdout.json";
 export const STDERR_FILE = "stderr.txt";
 
-/** The fixed prompt argument; the file paths are the only variable parts. */
+/**
+ * The fixed prompt argument; the file paths are the only variable parts.
+ *
+ * It begins with a pointer to the project's own instructions (R67): `CLAUDE.md` when the
+ * project has one, else `AGENTS.md`. Claude Code would load `CLAUDE.md` by itself, but not
+ * under `--setting-sources ""` (see `claudeArgs`), so the stage is told to read the file. It
+ * reads it as a file: `@` imports and nested `CLAUDE.md` files are not loaded for it.
+ */
 export function promptArgument(req: StageRequest): string {
-  const hasAgents = existsSync(join(req.projectRoot, "AGENTS.md"));
-  const hasClaude = existsSync(join(req.projectRoot, "CLAUDE.md"));
-  const prefix =
-    hasAgents && !hasClaude
-      ? "Read AGENTS.md at the project root first; it holds this project's instructions. "
-      : "";
+  const has = (name: string) => existsSync(join(req.projectRoot, name));
+  const instructions = has("CLAUDE.md") ? "CLAUDE.md" : has("AGENTS.md") ? "AGENTS.md" : null;
+  const prefix = instructions
+    ? `Read ${instructions} at the project root first; it holds this project's instructions. `
+    : "";
   return `${prefix}Your instructions are in ${req.promptFile}. Read that file completely, then follow it to the end. Your input data is in ${req.dispatchFile}.`;
 }
 
@@ -39,7 +45,9 @@ export function claudeArgs(req: StageRequest, mcpConfig: string): string[] {
     "--settings",
     join(req.runDir, SETTINGS_FILE),
     // R43: an empty source list, so the developer's user settings and the worktree's own
-    // `.claude/settings*.json` do not merge into the stage's permissions.
+    // `.claude/settings*.json` do not merge into the stage's permissions. It also stops Claude
+    // Code from loading the project's CLAUDE.md, which is why `promptArgument` points the
+    // stage at that file (R67).
     "--setting-sources",
     "",
     "--permission-mode",

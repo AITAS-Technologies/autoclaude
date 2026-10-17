@@ -88,7 +88,7 @@ describe("claude stage runner", () => {
     const { argv } = fake.read();
     expect(argv[0]).toBe("-p");
     expect(argv[1]).toBe(
-      `Your instructions are in ${req.promptFile}. Read that file completely, then follow it to the end. Your input data is in ${req.dispatchFile}.`,
+      `Read CLAUDE.md at the project root first; it holds this project's instructions. Your instructions are in ${req.promptFile}. Read that file completely, then follow it to the end. Your input data is in ${req.dispatchFile}.`,
     );
     const at = (flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
     expect(at("--output-format")).toBe("json");
@@ -163,8 +163,18 @@ describe("claude stage runner", () => {
     );
   });
 
-  it("does not point at AGENTS.md when CLAUDE.md exists too", async () => {
+  // R67: `--setting-sources ""` keeps Claude Code from loading CLAUDE.md itself, so the stage is
+  // pointed at it, and it wins over AGENTS.md.
+  it("does not point at AGENTS.md when CLAUDE.md exists too: it points at CLAUDE.md", async () => {
     const { fake, req } = setup({ stdout: fixture("ok") }, ["AGENTS.md", "CLAUDE.md"]);
+    await claudeAdapter.start(req, cfg).done;
+    expect(fake.read().argv[1]).toMatch(
+      /^Read CLAUDE\.md at the project root first; it holds this project's instructions\. Your instructions are in /,
+    );
+  });
+
+  it("points at no file when the project has neither", async () => {
+    const { fake, req } = setup({ stdout: fixture("ok") });
     await claudeAdapter.start(req, cfg).done;
     expect(fake.read().argv[1]).toMatch(/^Your instructions are in /);
   });

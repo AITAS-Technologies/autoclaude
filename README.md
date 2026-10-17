@@ -50,7 +50,7 @@ Then edit `.autoclaude/`:
 - `invariants.md`: the project's own code-review rules, as a table.
 - `config.local.json` (optional, never committed): your personal overrides of `budget`, `schedule`, `humans` and the model of each stage.
 
-Also give the project a `CLAUDE.md`. Stages read it as the project's instructions; `doctor` warns when neither `CLAUDE.md` nor `AGENTS.md` exists.
+Also give the project a `CLAUDE.md`. Stages read it as the project's instructions; `doctor` warns when neither `CLAUDE.md` nor `AGENTS.md` exists. Each stage is told to read the file first, because Claude Code does not load it by itself under the stage's settings; `@` imports and nested `CLAUDE.md` files in subdirectories are not loaded automatically, so keep what the stages need in the root file.
 
 Check the setup:
 
