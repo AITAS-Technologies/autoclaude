@@ -48,7 +48,7 @@ const defaults = (): InstanceDeps => ({
 
 const instancePath = (root: string): string => join(root, STATE_DIR, "instance.json");
 
-function readInstance(root: string): InstanceFile | null {
+export function readInstance(root: string): InstanceFile | null {
   try {
     const text = readFileSync(instancePath(root), "utf8").replace(/^﻿/, "");
     const v = JSON.parse(text) as Partial<InstanceFile>;
@@ -57,6 +57,25 @@ function readInstance(root: string): InstanceFile | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The orchestrator instance that is alive now: the one in `instance.json` when its heartbeat
+ * is at most 120 s old, else null. `status` and `situation` pass it as the live instance, so a
+ * stage of any other instance reads as dead. The pid is not probed: a reader that only looks
+ * (and may run on a machine where the pid is not visible) trusts the heartbeat, which a live
+ * orchestrator renews every 30 s.
+ */
+export function liveInstance(
+  root: string,
+  now: Date = new Date(),
+): { instance: string; pid: number; heartbeatAt: string; ageMs: number } | null {
+  const held = readInstance(root);
+  if (held === null) return null;
+  const beat = Date.parse(held.heartbeatAt);
+  if (!Number.isFinite(beat)) return null;
+  const ageMs = now.getTime() - beat;
+  return ageMs <= STALE_HEARTBEAT_MS ? { ...held, ageMs } : null;
 }
 
 function writeInstance(root: string, file: InstanceFile, pid: number): void {

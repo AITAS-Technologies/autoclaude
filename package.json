@@ -13,6 +13,8 @@
   "files": [
     "dist",
     "prompts",
+    "templates",
+    "catalogue",
     "NOTICE"
   ],
   "scripts": {

@@ -508,7 +508,7 @@ export function publish(issue: number, update: boolean, deps: PublishDeps): Publ
   const outside = notIssueBranch(entry.branch, issue, cfg, exec);
   if (outside !== null) {
     throw new Error(
-      `issue ${issue}: the ledger names branch "${entry.branch}", and this pushes that branch and opens a pull request for it — ${outside}. Correct the row first: set the entry's \`branch\` for issue ${issue} in .autoclaude/state/ledger.json to a name starting ${branchPrefixFor(issue, cfg)}`,
+      `issue ${issue}: the ledger names branch "${entry.branch}", and this pushes that branch and opens a pull request for it — ${outside}. Correct the row first: autoclaude pause, then autoclaude ledger set ${issue} ${entry.state} --branch ${branchPrefixFor(issue, cfg)}<slug>, then autoclaude resume`,
     );
   }
   if (update && !entry.pr)

@@ -19,7 +19,7 @@ export interface RunDeps {
   signals: NodeJS.Process;
 }
 
-function realContext(root: string, instance: string): TickCtx {
+export function realContext(root: string, instance: string): TickCtx {
   const cfg = loadProjectConfig(root);
   return {
     root,

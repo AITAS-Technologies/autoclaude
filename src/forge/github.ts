@@ -279,6 +279,29 @@ export class Forge {
     this.text(["pr", "edit", String(n), "--body-file", "-"], body);
   }
 
+  /** Every label of the repository, by name. */
+  listLabels(): string[] {
+    return complete(
+      this.json<Array<{ name: string }>>([
+        "label",
+        "list",
+        "--limit",
+        String(LIST_LIMIT),
+        "--json",
+        "name",
+      ]),
+      "gh label list",
+    ).map((l) => l.name);
+  }
+
+  /** Create a label; `--force` makes one that appeared in the meantime an update, not an error. */
+  createLabel(name: string, opts: { color?: string; description?: string } = {}): void {
+    const args = ["label", "create", name, "--force"];
+    if (opts.color) args.push("--color", opts.color);
+    if (opts.description) args.push("--description", opts.description);
+    this.text(args);
+  }
+
   viewPr(n: number): PrView {
     return this.json<PrView>(["pr", "view", String(n), "--json", PR_FIELDS]);
   }

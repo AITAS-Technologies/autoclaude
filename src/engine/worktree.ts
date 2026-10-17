@@ -117,7 +117,7 @@ export function createWorktree(
   if (existing) {
     if (!opts.replace)
       throw new Error(
-        `issue ${issue} already has a worktree at ${existing.path}; pass --replace to discard it`,
+        `issue ${issue} already has a worktree at ${existing.path}; run autoclaude rollback ${issue} to discard it`,
       );
     removeWorktree(root, issue, cfg, { deleteRemote: false }, exec);
   }
@@ -129,7 +129,7 @@ export function createWorktree(
   if (git(["branch", "--list", names.branch], exec, root).trim()) {
     if (!opts.replace)
       throw new Error(
-        `branch ${names.branch} already exists without a worktree; pass --replace to discard it`,
+        `branch ${names.branch} already exists without a worktree; run autoclaude rollback ${issue} to discard it`,
       );
     git(["branch", "-D", names.branch], exec, root);
   }
@@ -336,7 +336,7 @@ export function removeWorktree(
     // state the publish lease refuses.
     if (kept.has(branch)) {
       console.error(
-        `issue ${issue}: leaving ${branch} on ${remote} as well, because the local copy is checked out in a worktree and was kept. Remove that worktree, then delete both halves.`,
+        `issue ${issue}: leaving ${branch} on ${remote} as well, because the local copy is checked out in a worktree and was kept. Remove that worktree, then run autoclaude rollback ${issue} again.`,
       );
       continue;
     }
