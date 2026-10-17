@@ -26,7 +26,6 @@ const FORBIDDEN = [
   "scripts/autodev",
   "npx tsx",
   ".autodev/",
-  "gh ",
   "git fetch",
   "git push",
 ];
@@ -49,6 +48,8 @@ describe("prompt lint", () => {
     const text = readFileSync(file, "utf8");
     it(`${file} has no forbidden constructs`, () => {
       for (const bad of FORBIDDEN) expect(text, bad).not.toContain(bad);
+      // "gh " is the forge CLI; match it as a word so "through " is not flagged.
+      expect(text, "gh ").not.toMatch(/(^|[^A-Za-z0-9])gh /);
     });
   }
 
