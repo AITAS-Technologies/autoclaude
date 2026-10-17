@@ -25,6 +25,7 @@
  * git commands.
  */
 
+import { posix } from "node:path";
 import { matchesAny } from "../config/globs.js";
 import type { ProjectConfig } from "../config/types.js";
 import { Forge, git, resolveRepo, type Exec } from "../forge/github.js";
@@ -462,6 +463,31 @@ export function prBody(
   );
 }
 
+/** The engine's state directory in a worktree, as a diff names it. */
+const ENGINE_STATE = ".autoclaude/state";
+
+/**
+ * The changed paths equal to or under a `worktrees.copy` entry that `trackedOnBase` says the base
+ * does not track. Such a path is one the diff adds: nothing under an untracked entry is on the
+ * base to change or delete.
+ */
+export function untrackedCopies(
+  changed: string[],
+  cfg: Pick<ProjectConfig, "worktrees">,
+  trackedOnBase: (entry: string) => boolean,
+): string[] {
+  const out: string[] = [];
+  for (const raw of cfg.worktrees.copy) {
+    // The path as a diff spells it; one outside the project root is never copied.
+    const entry = posix.normalize(raw.replace(/\\/g, "/")).replace(/\/+$/, "");
+    if (entry === "." || entry === ".." || entry.startsWith("../") || /^(\/|[A-Za-z]:)/.test(entry))
+      continue;
+    const hits = changed.filter((f) => f === entry || f.startsWith(`${entry}/`));
+    if (hits.length > 0 && !trackedOnBase(entry)) out.push(...hits.filter((f) => !out.includes(f)));
+  }
+  return out;
+}
+
 export interface PublishDeps {
   exec: Exec;
   root: string;
@@ -618,6 +644,25 @@ export function publish(issue: number, update: boolean, deps: PublishDeps): Publ
   if (forbidden.length) {
     throw new Error(
       `issue ${issue}: the diff touches forbidden or policy-adjacent paths, refusing to push: ${forbidden.join(", ")}`,
+    );
+  }
+  //    And what the engine itself placed in the worktree (R72), whatever the project's
+  //    `.gitignore` says: its state, and a `worktrees.copy` entry the base does not track,
+  //    which is typically a secret copied in for the stages' use.
+  const state = changed.filter((f) => f === ENGINE_STATE || f.startsWith(`${ENGINE_STATE}/`));
+  if (state.length) {
+    throw new Error(
+      `issue ${issue}: the diff adds or changes the engine's own state under ${ENGINE_STATE}/, refusing to push: ${state.join(", ")}`,
+    );
+  }
+  const copied = untrackedCopies(
+    changed,
+    cfg,
+    (entry) => exec("git", ["cat-file", "-e", `${base}:${entry}`], { cwd: wt }).status === 0,
+  );
+  if (copied.length) {
+    throw new Error(
+      `issue ${issue}: the diff adds files the engine copied into the worktree (worktrees.copy, not tracked on ${base}), refusing to push: ${copied.join(", ")}`,
     );
   }
 

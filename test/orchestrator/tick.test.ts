@@ -217,6 +217,8 @@ function rig(opts: { instance?: string } = {}) {
       if (args.includes("worktree") && args.includes("list"))
         return ok(worktrees.map((w) => `worktree ${w}\nHEAD abc\n\n`).join(""));
       if (args.includes("rev-parse") && args.at(-1) === "HEAD") return ok(`${git.head}\n`);
+      // Where the engine keeps its exclude block (R72): a file of the rig's own.
+      if (args.includes("--git-path")) return ok(join(root, ".git", "info", "exclude"));
       if (args.includes("ls-remote")) {
         const prefix = args.at(-1)!.replace(/\*$/, "");
         const heads = git.remoteBranches.filter((b) => b.startsWith(prefix));

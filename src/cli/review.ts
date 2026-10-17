@@ -6,7 +6,7 @@ import { entryForPr, loadLedger, type LedgerEntry } from "../engine/ledger/ledge
 import { isReportComplete } from "../engine/review/reports.js";
 import { escapeRegExp } from "../engine/review/rules.js";
 import { repoRoot } from "../engine/root.js";
-import { copyIntoWorktree } from "../engine/worktree.js";
+import { copyIntoWorktree, ensureEngineExcludes } from "../engine/worktree.js";
 import { git } from "../forge/github.js";
 import type { TickCtx } from "../orchestrator/actions.js";
 import { runCodeReview } from "../orchestrator/review/code-review.js";
@@ -98,6 +98,7 @@ export async function reviewVerb(
       exec("git", ["worktree", "remove", "--force", worktree], { cwd: root });
       rmSync(worktree, { recursive: true, force: true });
       exec("git", ["worktree", "prune"], { cwd: root });
+      ensureEngineExcludes(root, cfg, exec);
       git(["worktree", "add", "--detach", "--quiet", worktree, pr.headRefOid], exec, root);
       created = worktree;
       for (const m of copyIntoWorktree(root, worktree, cfg).missing)

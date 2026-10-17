@@ -56,6 +56,7 @@ const cfg = {
   humans: ["maintainer"],
   forbiddenPaths: [".github/workflows/**", "POLICY.md"],
   policyAdjacentPaths: ["src/features/*/queries.ts"],
+  worktrees: { root: ".autoclaude/worktrees", copy: [".env.local", "conf/secrets/"] },
   humanApproval: [{ paths: ["db/migrations/**"], label: "human-approved" }],
   labelRules: [
     {
@@ -708,6 +709,47 @@ describe("publish, the step from a reviewed worktree to a pull request", () => {
       ).toThrow(/refusing to push/);
       expect(pushes(f.calls)).toEqual([]);
     }
+  });
+
+  // R72: what the engine placed in the worktree never leaves it, whatever the project's
+  // `.gitignore` says — its state, and a copied entry the base does not track.
+  it("refuses a diff that adds or changes the engine's state under .autoclaude/state/", () => {
+    for (const listed of [
+      ".autoclaude/state/reports/code-review.md\n",
+      ".autoclaude/state/bootstrapped\n",
+    ]) {
+      const { root } = setup();
+      const f = fake({
+        "git -c core.quotePath=false diff --name-only --no-renames": { stdout: listed },
+      });
+      expect(() =>
+        publish(9, false, { exec: f.exec, forge: new Forge("o/r", f.exec), root, cfg, now }),
+      ).toThrow(/engine's own state under \.autoclaude\/state\/, refusing to push/);
+      expect(pushes(f.calls)).toEqual([]);
+    }
+  });
+
+  it("refuses a diff that adds a worktrees.copy entry the base does not track, file or directory", () => {
+    for (const listed of [".env.local\n", "src/a.ts\nconf/secrets/key.pem\n"]) {
+      const { root } = setup();
+      // `git cat-file -e` has no answer here: the base does not have the entry.
+      const f = fake({
+        "git -c core.quotePath=false diff --name-only --no-renames": { stdout: listed },
+      });
+      expect(() =>
+        publish(9, false, { exec: f.exec, forge: new Forge("o/r", f.exec), root, cfg, now }),
+      ).toThrow(/copied into the worktree \(worktrees\.copy, not tracked on upstream\/develop\)/);
+      expect(pushes(f.calls)).toEqual([]);
+    }
+    // The positive control: an entry the base tracks is the project's own file to change.
+    const { root } = setup();
+    const f = fake({
+      "git -c core.quotePath=false diff --name-only --no-renames": { stdout: ".env.local\n" },
+      "git cat-file -e upstream/develop:.env.local": {},
+    });
+    expect(
+      publish(9, false, { exec: f.exec, forge: new Forge("o/r", f.exec), root, cfg, now }),
+    ).toMatchObject({ code: 0 });
   });
 
   // an update names the last pushed commit as the lease. Without a recorded

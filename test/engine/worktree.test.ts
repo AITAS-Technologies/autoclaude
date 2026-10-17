@@ -10,10 +10,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   createWorktree,
+  ensureEngineExcludes,
+  EXCLUDE_BEGIN,
+  EXCLUDE_END,
   namesFor,
   parseCreateArgs,
   parseWorktrees,
@@ -245,6 +248,47 @@ describe("create and remove, against a real temporary repository", () => {
     );
     expect(existsSync(wtDir(root, "agent+2-copy-fails"))).toBe(false);
     expect(sh(root, "branch", "--list", "agent/2-copy-fails")).toBe("");
+  }, 60_000);
+
+  // R72: the engine's own paths are ignored in every worktree through the shared exclude file,
+  // in a block of its own that is written once and rewritten only when the entries change.
+  it("writes the exclude block once, idempotently, and never touches the lines around it", () => {
+    const { root } = repo("autoclaude-wt-exclude-");
+    const file = ensureEngineExcludes(root, withRoot(".autoclaude/worktrees", [".env.local"]));
+    expect(samePath(file, join(root, ".git", "info", "exclude"))).toBe(true);
+    const block = [EXCLUDE_BEGIN, "/.autoclaude/state/", "/.env.local", EXCLUDE_END];
+    const first = readFileSync(file, "utf8");
+    expect(first.split(/\r?\n/).filter((l) => l.startsWith("# autoclaude"))).toHaveLength(2);
+    expect(first).toContain(block.join("\n"));
+    // A line of the developer's own after the block, then the same call again: unchanged.
+    writeFileSync(file, `${first}mine/\n`);
+    ensureEngineExcludes(root, withRoot(".autoclaude/worktrees", [".env.local"]));
+    expect(readFileSync(file, "utf8")).toBe(`${first}mine/\n`);
+    // The entries change: the block is rewritten in place, everything else stays.
+    ensureEngineExcludes(root, withRoot(".autoclaude/worktrees", ["conf/local dir/", "a*b"]));
+    const after = readFileSync(file, "utf8");
+    expect(after).toBe(
+      `${first.replace(block.join("\n"), [EXCLUDE_BEGIN, "/.autoclaude/state/", "/conf/local dir", "/a\\*b", EXCLUDE_END].join("\n"))}mine/\n`,
+    );
+  }, 60_000);
+
+  it("makes a linked worktree ignore what the engine places in it, through the common exclude file", () => {
+    const { root } = repo("autoclaude-wt-ignored-");
+    writeFileSync(join(root, ".env.local"), "SECRET=1\n");
+    const made = make(root, 14, "Ignored copy");
+    expect(made.copied).toEqual([".env.local"]);
+    // The file the linked worktree reads is the one the block went into.
+    const theirs = sh(made.worktree, "rev-parse", "--git-path", "info/exclude");
+    expect(samePath(resolve(made.worktree, theirs), join(root, ".git", "info", "exclude"))).toBe(
+      true,
+    );
+    // Neither the copied secret nor the engine's state shows up, so `git add -A` takes neither.
+    mkdirSync(join(made.worktree, ".autoclaude", "state", "plans"), { recursive: true });
+    writeFileSync(join(made.worktree, ".autoclaude", "state", "plans", "14.md"), "plan\n");
+    expect(sh(made.worktree, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    sh(made.worktree, "add", "-A");
+    expect(sh(made.worktree, "diff", "--cached", "--name-only")).toBe("");
+    removeWorktree(root, 14, cfg, { deleteRemote: false });
   }, 60_000);
 
   // New: a root with a space and a non-ASCII character (design § 13, plan Review Focus 1).

@@ -11,7 +11,15 @@
  * through a shell.
  */
 
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ProjectConfig } from "../config/types.js";
 import { git, realExec, type Exec } from "../forge/github.js";
@@ -159,6 +167,9 @@ export function createWorktree(
       );
     }
   }
+  // Before the worktree exists, so a failure here leaves nothing behind, and so nothing the
+  // engine is about to place in it can ever show up as untracked there.
+  ensureEngineExcludes(root, cfg, exec);
   git(["worktree", "add", names.worktree, "-b", names.branch, base], exec, root);
 
   let copy: ReturnType<typeof copyIntoWorktree>;
@@ -381,6 +392,73 @@ export function parseCreateArgs(rest: string[]): { title: string; replace: boole
     .trim();
   if (!title) throw new Error("create: the title after -- is empty");
   return { title, replace: options.includes("--replace") };
+}
+
+export const EXCLUDE_BEGIN = "# autoclaude: engine-owned paths (begin)";
+export const EXCLUDE_END = "# autoclaude: engine-owned paths (end)";
+
+/**
+ * A `worktrees.copy` entry as a gitignore pattern for that path and nothing else: anchored with
+ * a leading `/` (which also keeps a leading `!` or `#` literal), glob characters and trailing
+ * spaces escaped. Null for an entry outside the project root, which is never copied either.
+ */
+function excludePattern(root: string, entry: string): string | null {
+  const rel = relative(root, resolve(root, entry));
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  const escaped = toPosix(rel)
+    .replace(/[*?[\]\\]/g, "\\$&")
+    .replace(/ +$/, (s) => s.replaceAll(" ", "\\ "));
+  return `/${escaped}`;
+}
+
+/**
+ * The block of engine-owned paths in the repository's shared exclude file: `.autoclaude/state/`
+ * and every `worktrees.copy` entry, between the two marker lines (R72).
+ *
+ * A worktree starts at `<remote>/<integration>`, so the ignore rules it reads are that branch's
+ * `.gitignore`, which on a first run may not list `.autoclaude/state/` yet, and never has to
+ * list a copied secret. The guard allows `git add -A`, so whatever the engine puts in a
+ * worktree would be committed and pushed. The exclude file is git's own per-repository list,
+ * read by the main checkout and every linked worktree alike (`git rev-parse --git-path
+ * info/exclude` names the common directory's), and committed nowhere.
+ *
+ * Idempotent: the block is rewritten only when its entries changed, and nothing outside the
+ * two markers is touched. Returns the file.
+ */
+export function ensureEngineExcludes(
+  root: string,
+  cfg: Pick<ProjectConfig, "worktrees">,
+  exec: Exec = realExec,
+): string {
+  const named = git(["rev-parse", "--git-path", "info/exclude"], exec, root).trim();
+  if (!named) throw new Error("git rev-parse --git-path info/exclude named no file");
+  const file = resolve(root, named);
+  const patterns = cfg.worktrees.copy
+    .map((entry) => excludePattern(root, entry))
+    .filter((p): p is string => p !== null);
+  const block = [EXCLUDE_BEGIN, "/.autoclaude/state/", ...new Set(patterns), EXCLUDE_END];
+  let text = "";
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text === "" ? [] : text.replace(/\r?\n$/, "").split(/\r?\n/);
+  // The block is the first end marker and the begin marker nearest above it: a begin a human
+  // left without its end is a line outside the block, and stays.
+  const end = lines.indexOf(EXCLUDE_END);
+  const begin = end < 0 ? -1 : lines.lastIndexOf(EXCLUDE_BEGIN, end);
+  const next =
+    begin < 0
+      ? [...lines, ...block]
+      : [...lines.slice(0, begin), ...block, ...lines.slice(end + 1)];
+  const out = `${next.join(eol)}${eol}`;
+  if (out !== text) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, out);
+  }
+  return file;
 }
 
 /** A `worktrees.copy` entry, or a link inside one, that was not copied, and why. */
