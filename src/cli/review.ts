@@ -1,13 +1,17 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { prArg, flag } from "./args.js";
+import { flag, prArg } from "./args.js";
+import { bootstrapWorktree } from "../engine/bootstrap.js";
 import { entryForPr, loadLedger, type LedgerEntry } from "../engine/ledger/ledger.js";
+import { isReportComplete } from "../engine/review/reports.js";
 import { escapeRegExp } from "../engine/review/rules.js";
 import { repoRoot } from "../engine/root.js";
+import { copyIntoWorktree } from "../engine/worktree.js";
 import { git } from "../forge/github.js";
 import type { TickCtx } from "../orchestrator/actions.js";
 import { runCodeReview } from "../orchestrator/review/code-review.js";
 import { messageOf, usageError } from "./common.js";
+import { interruptible, type Interruptible } from "./interrupt.js";
 import type { Io } from "./main.js";
 import { realContext } from "./run.js";
 
@@ -17,16 +21,23 @@ export interface ReviewDeps {
   root: (cwd: string) => string;
   context: (root: string, instance: string) => TickCtx;
   review: typeof runCodeReview;
+  /** Where the termination signals come from. */
+  signals?: NodeJS.Process;
 }
 
 const realDeps: ReviewDeps = { root: repoRoot, context: realContext, review: runCodeReview };
 
 /**
  * `autoclaude review --pr <n>`: the code review on an open pull request, posted as a comment
- * on it. The review reads the pull request's head commit in a worktree: the ledger entry's,
- * when it stands at that commit, otherwise a detached one made for the review and removed
- * afterwards. Exit 0 when the review ran (and was posted, or was already posted for that
- * commit), 1 when it could not run or hit a usage limit.
+ * on it, through the same pipeline the orchestrator runs. The review reads the pull request's
+ * head commit in a worktree: the ledger entry's when it stands at that commit, otherwise a
+ * detached one made for the review (the project's `worktrees.copy` files copied in) and
+ * removed afterwards. Either way the engine's `bootstrap` has run there, once, with the normal
+ * environment.
+ *
+ * Exit 0 when the review ran to its verdict and the comment is posted (or was already), 2 when
+ * the review stopped early (nothing was posted), 1 when it could not run, hit a usage limit or
+ * was interrupted. Ctrl-C kills the review's processes.
  */
 export async function reviewVerb(
   args: string[],
@@ -47,10 +58,11 @@ export async function reviewVerb(
 
   let created: string | null = null;
   let root: string | null = null;
-  let ctx: TickCtx | null = null;
+  let guard: Interruptible | null = null;
   try {
     root = deps.root(cwd);
-    ctx = deps.context(root, `review-${process.pid}`);
+    guard = interruptible(deps.context(root, `review-${process.pid}`), deps.signals ?? process);
+    const ctx = guard.ctx;
     const { cfg, forge, exec } = ctx;
     const pr = forge.viewPr(n);
     if (pr.state !== "OPEN") {
@@ -79,10 +91,21 @@ export async function reviewVerb(
       exec("git", ["rev-parse", "HEAD"], { cwd: dir }).stdout.trim() === pr.headRefOid;
     if (known && known.worktree && sameHead(known.worktree)) worktree = known.worktree;
     else {
-      worktree = join(resolve(root, cfg.worktrees.root), `review-pr-${n}`);
-      mkdirSync(resolve(root, cfg.worktrees.root), { recursive: true });
+      const parent = resolve(root, cfg.worktrees.root);
+      worktree = join(parent, `review-pr-${n}`);
+      mkdirSync(parent, { recursive: true });
+      // A worktree an earlier, interrupted review left behind would make `worktree add` fail.
+      exec("git", ["worktree", "remove", "--force", worktree], { cwd: root });
+      rmSync(worktree, { recursive: true, force: true });
+      exec("git", ["worktree", "prune"], { cwd: root });
       git(["worktree", "add", "--detach", "--quiet", worktree, pr.headRefOid], exec, root);
       created = worktree;
+      copyIntoWorktree(root, worktree, cfg);
+    }
+    const failed = await bootstrapWorktree(cfg, worktree, ctx.now());
+    if (failed !== null) {
+      io.err(`review of #${n}: ${failed}\n`);
+      return 1;
     }
     const base: LedgerEntry = known ?? {
       issue,
@@ -102,28 +125,36 @@ export async function reviewVerb(
     const outcome = await deps.review(
       ctx,
       { ...base, worktree },
-      {
-        kind: "pr",
-        pr: n,
-        headSha: pr.headRefOid,
-      },
+      { kind: "pr", pr: n, headSha: pr.headRefOid },
     );
-    if (outcome.kind === "limit") {
-      io.err(`usage limit until ${outcome.resetsAt}; run this again after it\n`);
+    if (guard.interrupted()) {
+      io.err(`review of #${n} was interrupted; nothing was posted\n`);
       return 1;
     }
-    io.out(
-      `review of #${n} at ${pr.headRefOid.slice(0, 12)} done; the report is ${outcome.reportFile}\n`,
-    );
+    if (outcome.kind === "limit") {
+      io.err(
+        `usage limit until ${outcome.resetsAt}; nothing was posted, run this again after it\n`,
+      );
+      return 1;
+    }
+    const at = pr.headRefOid.slice(0, 12);
+    if (!isReportComplete("code-review", readFileSync(outcome.reportFile, "utf8"))) {
+      io.err(
+        `review of #${n} at ${at} stopped before its verdict; nothing was posted (the report is ${outcome.reportFile})\n`,
+      );
+      return 2;
+    }
+    io.out(`review of #${n} at ${at} is posted (or was already)\n`);
     return 0;
   } catch (e) {
-    io.err(`${messageOf(e)}\n`);
+    io.err(`${guard?.interrupted() ? "interrupted: " : ""}${messageOf(e)}\n`);
     return 1;
   } finally {
+    await guard?.dispose();
     if (created !== null && root !== null) {
       try {
-        git(["worktree", "remove", "--force", created], ctx?.exec ?? undefined, root);
-        git(["worktree", "prune"], ctx?.exec ?? undefined, root);
+        git(["worktree", "remove", "--force", created], guard?.ctx.exec, root);
+        git(["worktree", "prune"], guard?.ctx.exec, root);
       } catch (e) {
         io.err(`could not remove ${created}: ${messageOf(e)}\n`);
       }

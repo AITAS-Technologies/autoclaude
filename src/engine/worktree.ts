@@ -153,22 +153,7 @@ export function createWorktree(
   }
   git(["worktree", "add", names.worktree, "-b", names.branch, base], exec, root);
 
-  const copied: string[] = [];
-  const missing: string[] = [];
-  for (const entry of cfg.worktrees.copy) {
-    const from = resolve(root, entry);
-    const rel = relative(root, from);
-    // Inside the project root only: a configured `../x` or an absolute path is not a file
-    // of this project, so it is reported as not copied rather than followed.
-    if (!rel || rel.startsWith("..") || isAbsolute(rel) || !existsSync(from)) {
-      missing.push(entry);
-      continue;
-    }
-    const to = join(names.worktree, rel);
-    mkdirSync(dirname(to), { recursive: true });
-    cpSync(from, to, { recursive: true });
-    copied.push(entry);
-  }
+  const { copied, missing } = copyIntoWorktree(root, names.worktree, cfg);
   mkdirSync(join(names.worktree, ".autoclaude", "state", "reports"), { recursive: true });
   return { branch: names.branch, worktree: names.worktree, copied, missing, notes };
 }
@@ -368,4 +353,29 @@ export function parseCreateArgs(rest: string[]): { title: string; replace: boole
     .trim();
   if (!title) throw new Error("create: the title after -- is empty");
   return { title, replace: options.includes("--replace") };
+}
+
+/** Copies `worktrees.copy` from the project root into a worktree; returns what was and was not copied. */
+export function copyIntoWorktree(
+  root: string,
+  worktree: string,
+  cfg: Pick<ProjectConfig, "worktrees">,
+): { copied: string[]; missing: string[] } {
+  const copied: string[] = [];
+  const missing: string[] = [];
+  for (const entry of cfg.worktrees.copy) {
+    const from = resolve(root, entry);
+    const rel = relative(root, from);
+    // Inside the project root only: a configured `../x` or an absolute path is not a file
+    // of this project, so it is reported as not copied rather than followed.
+    if (!rel || rel.startsWith("..") || isAbsolute(rel) || !existsSync(from)) {
+      missing.push(entry);
+      continue;
+    }
+    const to = join(worktree, rel);
+    mkdirSync(dirname(to), { recursive: true });
+    cpSync(from, to, { recursive: true });
+    copied.push(entry);
+  }
+  return { copied, missing };
 }

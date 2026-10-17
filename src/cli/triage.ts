@@ -2,6 +2,7 @@ import { flag, issueArg } from "./args.js";
 import { repoRoot } from "../engine/root.js";
 import { triageIssue, type TickCtx } from "../orchestrator/actions.js";
 import { messageOf, usageError } from "./common.js";
+import { interruptible, type Interruptible } from "./interrupt.js";
 import type { Io } from "./main.js";
 import { realContext } from "./run.js";
 
@@ -11,6 +12,8 @@ export interface TriageDeps {
   root: (cwd: string) => string;
   context: (root: string, instance: string) => TickCtx;
   triage: typeof triageIssue;
+  /** Where the termination signals come from. */
+  signals?: NodeJS.Process;
 }
 
 const realDeps: TriageDeps = { root: repoRoot, context: realContext, triage: triageIssue };
@@ -40,9 +43,11 @@ export async function triageVerb(
   } catch (e) {
     return usageError(io, USAGE, messageOf(e));
   }
+  let guard: Interruptible | null = null;
   try {
     const root = deps.root(cwd);
-    const ctx = deps.context(root, `triage-${process.pid}`);
+    guard = interruptible(deps.context(root, `triage-${process.pid}`), deps.signals ?? process);
+    const ctx = guard.ctx;
     let numbers: number[];
     if (only !== undefined) numbers = [only];
     else {
@@ -67,13 +72,20 @@ export async function triageVerb(
     }
     let failed = false;
     for (const n of numbers) {
+      if (guard.interrupted()) break;
       const r = await deps.triage(ctx, n);
+      if (guard.interrupted()) {
+        io.err(`triage of #${n} was interrupted; nothing was applied\n`);
+        return 1;
+      }
       io.out(`#${n}: ${r.decision} — ${r.reason}\n`);
       if (FAILING.has(r.decision)) failed = true;
     }
     return failed ? 1 : 0;
   } catch (e) {
-    io.err(`${messageOf(e)}\n`);
+    io.err(`${guard?.interrupted() ? "interrupted: " : ""}${messageOf(e)}\n`);
     return 1;
+  } finally {
+    await guard?.dispose();
   }
 }

@@ -911,3 +911,41 @@ describe("autoclaude post-review and check-rebased", () => {
     ).toBe(1);
   });
 });
+
+describe("autoclaude post-review with a configuration that cannot be read", () => {
+  it("still posts the review, degraded, with the repository taken from origin", async () => {
+    const root = projectRoot();
+    writeFileSync(join(root, ".autoclaude", "config.json"), "{ broken");
+    const report = join(tempDir("autoclaude-post-"), "r.md");
+    writeFileSync(report, readFileSync(join(REPORTS, "code-review.md"), "utf8"));
+    const posted: string[] = [];
+    const exec = routed([
+      (cmd, a) => {
+        if (cmd === "git" && a.includes("get-url"))
+          return { stdout: "https://github.com/acme/widgets.git\n" };
+        if (cmd === "gh" && a.includes("view")) return { stdout: '{"comments":[]}' };
+        if (cmd === "gh" && a.includes("comment")) {
+          posted.push(a.join(" "));
+          return {};
+        }
+        return undefined;
+      },
+    ]);
+    const c = capture();
+    const code = await postReviewVerb(
+      ["7", "--report", report, "--sha", "abc123"],
+      c.io,
+      root,
+      envFor(root, {
+        exec,
+        config: () => {
+          throw new Error("config.json: invalid JSON");
+        },
+      }),
+    );
+    expect(code, c.errText()).toBe(0);
+    expect(posted).toHaveLength(1);
+    expect(posted[0]).toContain("-R acme/widgets pr comment 7");
+    expect(c.errText()).toMatch(/configuration cannot be read/);
+  });
+});

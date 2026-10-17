@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { issueVerb, type IssueDeps } from "../../src/cli/issue.js";
@@ -157,9 +157,19 @@ describe("autoclaude issue", () => {
       ({
         newWork: { allowed: true, reasons: [], claimedThisWindow: 0 },
         queue: [{ number: 8, title: "other" }],
+        issues: [{ issue: 7 }, { issue: 8 }],
+        cleanup: [{ issue: 7 }, { issue: 8 }],
+        stalled: [{ issue: 8 }],
       }) as unknown as Situation;
-    const wrapped = rigWrapped(r.deps, stub, r.root);
-    expect(await wrapped).toEqual({ allowed: false, queue: [] });
+    // Another in-flight entry (#8) is invisible to the tick: it is neither published, fixed,
+    // cleaned up nor waited for by this attended run.
+    expect(await rigWrapped(r.deps, stub, r.root)).toEqual({
+      allowed: false,
+      queue: [],
+      issues: [7],
+      cleanup: [7],
+      stalled: [],
+    });
   });
 
   it("exits 1 for a state a human must look at, and says why", async () => {
@@ -209,7 +219,13 @@ async function rigWrapped(
   deps: IssueDeps,
   base: () => Situation,
   root: string,
-): Promise<{ allowed: boolean; queue: unknown[] }> {
+): Promise<{
+  allowed: boolean;
+  queue: unknown[];
+  issues: number[];
+  cleanup: number[];
+  stalled: number[];
+}> {
   let seen: TickCtx | undefined;
   const probe: IssueDeps = {
     ...deps,
@@ -227,7 +243,13 @@ async function rigWrapped(
   };
   await issueVerb(["7"], capture().io, "x", probe);
   const s = seen!.deps!.situation!(seen!);
-  return { allowed: s.newWork.allowed, queue: s.queue };
+  return {
+    allowed: s.newWork.allowed,
+    queue: s.queue,
+    issues: s.issues.map((i) => i.issue),
+    cleanup: s.cleanup.map((i) => i.issue),
+    stalled: s.stalled.map((i) => i.issue),
+  };
 }
 
 describe("autoclaude triage", () => {
@@ -355,17 +377,45 @@ describe("autoclaude triage", () => {
 });
 
 describe("autoclaude review --pr", () => {
+  const COMPLETE = readFileSync(join(REPO, "test/fixtures/reports/code-review.md"), "utf8");
+  const STOPPED = readFileSync(join(REPO, "test/fixtures/reports/code-review-stopped.md"), "utf8");
+
+  interface Seen {
+    worktree: string;
+    existed: boolean;
+    target: unknown;
+    issue: number;
+    secret: boolean;
+    bootstraps: number;
+  }
+
   function rig(
     opts: {
       prState?: "OPEN" | "CLOSED";
       branch?: string;
-      outcome?: "report" | "limit";
+      outcome?: "report" | "stopped" | "limit" | "hang";
       entryWorktree?: boolean;
+      /** bootstrap + worktrees.copy in the project's config */
+      prepared?: boolean;
     } = {},
   ) {
     const root = tempRepo({ project: MINIMAL });
+    if (opts.prepared) {
+      const path = join(root, ".autoclaude", "config.json");
+      const doc = JSON.parse(readFileSync(path, "utf8"));
+      doc.bootstrap = "echo ran >> bootstrap.log";
+      doc.worktrees = { root: ".autoclaude/worktrees", copy: ["secret.env"] };
+      writeFileSync(path, JSON.stringify(doc));
+      writeFileSync(join(root, "secret.env"), "TOKEN=x\n");
+    }
     const oid = git(root, "rev-parse", "HEAD");
-    const calls: Array<{ worktree: string; existed: boolean; target: unknown; issue: number }> = [];
+    const calls: Seen[] = [];
+    const killed: number[] = [];
+    let started: () => void = () => {};
+    const hasStarted = new Promise<void>((r) => (started = r));
+    const dir = tempDir("autoclaude-review-report-");
+    const reportFile = join(dir, "code-review.md");
+    writeFileSync(reportFile, opts.outcome === "stopped" ? STOPPED : COMPLETE);
     const pr = {
       number: 40,
       state: opts.prState ?? "OPEN",
@@ -380,8 +430,10 @@ describe("autoclaude review --pr", () => {
       updatedAt: "",
       isDraft: false,
     };
+    const signals = new EventEmitter();
     const deps: ReviewDeps = {
       root: () => root,
+      signals: signals as unknown as NodeJS.Process,
       context: (r, instance) =>
         ctxFor(
           r,
@@ -392,18 +444,44 @@ describe("autoclaude review --pr", () => {
                 : undefined,
             (cmd, a) => (cmd === "git" && a.includes("fetch") ? {} : undefined),
           ],
-          { instance },
+          {
+            instance,
+            runtimes: () => ({
+              name: "claude",
+              available: async () => ({ ok: true }),
+              start: () => {
+                let finish: () => void = () => {};
+                const done = new Promise<never>(
+                  (_res, rej) => (finish = () => rej(new Error("killed"))),
+                );
+                started();
+                return {
+                  pid: 1,
+                  startedAt: "",
+                  done,
+                  kill: async () => {
+                    killed.push(1);
+                    finish();
+                  },
+                };
+              },
+            }),
+          },
         ),
-      review: async (_ctx, entry, target) => {
+      review: async (c, entry, target) => {
+        const log = join(entry.worktree, "bootstrap.log");
         calls.push({
           worktree: entry.worktree,
           existed: existsSync(entry.worktree),
           target,
           issue: entry.issue,
+          secret: existsSync(join(entry.worktree, "secret.env")),
+          bootstraps: existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").length : 0,
         });
+        if (opts.outcome === "hang") await c.runtimes("claude").start({} as never, c.cfg).done;
         return opts.outcome === "limit"
           ? { kind: "limit", resetsAt: "2026-10-17T12:00:00.000Z" }
-          : { kind: "report", reportFile: "r" };
+          : { kind: "report", reportFile };
       },
     };
     if (opts.entryWorktree) {
@@ -420,7 +498,7 @@ describe("autoclaude review --pr", () => {
         NOW,
       );
     }
-    return { root, oid, calls, deps };
+    return { root, oid, calls, deps, signals, killed, hasStarted };
   }
 
   it("reviews the head of an open pull request in a detached worktree and removes it afterwards", async () => {
@@ -435,7 +513,20 @@ describe("autoclaude review --pr", () => {
     });
     expect(existsSync(r.calls[0]!.worktree)).toBe(false);
     expect(git(r.root, "worktree", "list", "--porcelain")).not.toContain("review-pr-40");
-    expect(c.text()).toMatch(/review of #40/);
+    expect(c.text()).toMatch(/review of #40 .* is posted/);
+  });
+
+  it("is the unattended pipeline: bootstrap runs once and worktrees.copy is copied", async () => {
+    const r = rig({ prepared: true });
+    expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
+    expect(r.calls[0]).toMatchObject({ secret: true, bootstraps: 1 });
+  });
+
+  it("runs the bootstrap of a ledger worktree once, not again when its marker is there", async () => {
+    const r = rig({ prepared: true, entryWorktree: true });
+    expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
+    expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
+    expect(r.calls.map((c) => c.bootstraps)).toEqual([1, 1]);
   });
 
   it("reuses the ledger entry's worktree when it stands at the pull request's head", async () => {
@@ -443,6 +534,14 @@ describe("autoclaude review --pr", () => {
     expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
     expect(r.calls[0]!.worktree).toBe(r.root);
     expect(r.calls[0]!.issue).toBe(9);
+  });
+
+  it("exits 2 and says nothing was posted when the review stopped before its verdict", async () => {
+    const r = rig({ outcome: "stopped" });
+    const c = capture();
+    expect(await reviewVerb(["--pr", "40"], c.io, "x", r.deps)).toBe(2);
+    expect(c.errText()).toMatch(/stopped before its verdict; nothing was posted/);
+    expect(c.text()).toBe("");
   });
 
   it("exits 1 for a closed pull request, for a branch that names no issue and for a usage limit", async () => {
@@ -456,7 +555,81 @@ describe("autoclaude review --pr", () => {
     const limited = rig({ outcome: "limit" });
     const l = capture();
     expect(await reviewVerb(["--pr", "40"], l.io, "x", limited.deps)).toBe(1);
-    expect(l.errText()).toMatch(/usage limit until 2026-10-17T12:00:00.000Z/);
+    expect(l.errText()).toMatch(/usage limit until 2026-10-17T12:00:00.000Z; nothing was posted/);
     expect(existsSync(limited.calls[0]!.worktree)).toBe(false);
+  });
+
+  it("Ctrl-C kills the review's processes, removes its worktree and lets go of the signals", async () => {
+    const r = rig({ outcome: "hang" });
+    const c = capture();
+    const run = reviewVerb(["--pr", "40"], c.io, "x", r.deps);
+    await r.hasStarted;
+    r.signals.emit("SIGINT");
+    expect(await run).toBe(1);
+    expect(r.killed.length).toBeGreaterThanOrEqual(1);
+    expect(c.errText()).toMatch(/interrupted/);
+    expect(existsSync(r.calls[0]!.worktree)).toBe(false);
+    expect(r.signals.listenerCount("SIGINT")).toBe(0);
+    expect(git(r.root, "worktree", "list", "--porcelain")).not.toContain("review-pr-40");
+  });
+
+  it("removes a review worktree an earlier interrupted run left behind", async () => {
+    const r = rig();
+    const stale = join(r.root, ".autoclaude", "worktrees", "review-pr-40");
+    mkdirSync(join(r.root, ".autoclaude", "worktrees"), { recursive: true });
+    git(r.root, "worktree", "add", "--detach", "--quiet", stale, r.oid);
+    expect(await reviewVerb(["--pr", "40"], capture().io, "x", r.deps)).toBe(0);
+    expect(existsSync(stale)).toBe(false);
+  });
+});
+
+describe("autoclaude triage and Ctrl-C", () => {
+  it("kills the triage stage's process on SIGINT, exits 1 and lets go of the signals", async () => {
+    const root = tempDir("autoclaude-triage-int-");
+    cpSync(join(FULL, ".autoclaude"), join(root, ".autoclaude"), { recursive: true });
+    const signals = new EventEmitter();
+    const killed: number[] = [];
+    let started: () => void = () => {};
+    const hasStarted = new Promise<void>((r) => (started = r));
+    const deps: TriageDeps = {
+      root: () => root,
+      signals: signals as unknown as NodeJS.Process,
+      context: (r, instance) =>
+        ctxFor(r, [], {
+          instance,
+          runtimes: () => ({
+            name: "claude",
+            available: async () => ({ ok: true }),
+            start: () => {
+              let finish: () => void = () => {};
+              const done = new Promise<never>(
+                (_res, rej) => (finish = () => rej(new Error("killed"))),
+              );
+              started();
+              return {
+                pid: 1,
+                startedAt: "",
+                done,
+                kill: async () => {
+                  killed.push(1);
+                  finish();
+                },
+              };
+            },
+          }),
+        }),
+      triage: async (c) => {
+        await c.runtimes("claude").start({} as never, c.cfg).done;
+        return { decision: "ready", reason: "r", actions: [] } as never;
+      },
+    };
+    const c = capture();
+    const run = triageVerb(["--issue", "7"], c.io, "x", deps);
+    await hasStarted;
+    signals.emit("SIGINT");
+    expect(await run).toBe(1);
+    expect(killed.length).toBeGreaterThanOrEqual(1);
+    expect(c.errText()).toMatch(/interrupted/);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
   });
 });

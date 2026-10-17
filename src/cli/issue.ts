@@ -1,8 +1,7 @@
 import { issueArg } from "./args.js";
 import { repoRoot } from "../engine/root.js";
 import { loadLedger, TERMINAL } from "../engine/ledger/ledger.js";
-import { computeSituation, type Situation } from "../engine/situation.js";
-import { takeIssue, type TickCtx } from "../orchestrator/actions.js";
+import { engineDeps, takeIssue, type TickCtx } from "../orchestrator/actions.js";
 import { acquireInstance, recoverOrphans } from "../orchestrator/instance.js";
 import { runLoop } from "../orchestrator/loop.js";
 import { tick as realTick } from "../orchestrator/tick.js";
@@ -78,24 +77,19 @@ export async function issueVerb(
     const live = ctx;
     second.signal.addEventListener("abort", () => void live.stages.stopAll(), { once: true });
 
-    // Step 4 takes no new work in an attended run: the situation the tick reads offers an
-    // empty queue and a closed gate, whatever the repository holds.
-    const base =
-      live.deps?.situation ??
-      ((c: TickCtx): Situation =>
-        computeSituation(c.root, c.cfg, {
-          forge: c.forge,
-          exec: c.exec,
-          now: c.now(),
-          liveInstance: c.instance,
-          readOnly: false,
-        }));
+    // An attended run is about this one issue: the situation the tick reads offers an empty
+    // queue and a closed gate (Step 4 claims nothing), and only this issue's entry, cleanup
+    // and stalled rows, so the tick neither publishes, fixes nor waits for any other issue.
+    const base = engineDeps(live).situation;
     live.deps = {
       ...live.deps,
       situation: (c) => {
         const s = base(c);
         return {
           ...s,
+          issues: s.issues.filter((i) => i.issue === n),
+          cleanup: s.cleanup.filter((i) => i.issue === n),
+          stalled: s.stalled.filter((i) => i.issue === n),
           queue: [],
           newWork: {
             ...s.newWork,

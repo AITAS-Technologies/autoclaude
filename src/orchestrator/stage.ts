@@ -15,11 +15,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProjectConfig, Runtime, StageSpec } from "../config/types.js";
+import { bootstrapWorktree } from "../engine/bootstrap.js";
 import { runDir as issueRunsDir, updateLedger, type LedgerEntry } from "../engine/ledger/ledger.js";
 import { reportPath } from "../engine/review/reports.js";
 import type { Exec, Forge } from "../forge/github.js";
 import { processStartTime } from "../platform/kill.js";
-import { runShell } from "../platform/shell.js";
 import { writeDispatch, type Dispatch } from "../prompts/dispatch.js";
 import { renderPrompt } from "../prompts/render.js";
 import type { RuntimeAdapter, StageRequest, StageResult } from "../runtimes/types.js";
@@ -57,7 +57,6 @@ type Extra = {
 };
 
 const ENGINE_RULES = fileURLToPath(new URL("../../catalogue/rules.md", import.meta.url));
-const BOOTSTRAP_MARKER = join(".autoclaude", "state", "bootstrapped");
 const PLANS_DIR = join(".autoclaude", "state", "plans");
 
 const clean = (text: string): string => text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
@@ -142,16 +141,8 @@ export async function runStage(
         return stopped(
           `${stage}: git fetch ${cfg.forge.remote} ${cfg.branches.integration} failed (exit ${f.status}): ${tail(f.stderr)}`,
         );
-      const marker = join(worktree, BOOTSTRAP_MARKER);
-      if (cfg.bootstrap && !existsSync(marker)) {
-        const b = await runShell(cfg.bootstrap, { cwd: worktree, timeoutMs: wallClockMs });
-        if (b.status !== 0 || b.timedOut)
-          return stopped(
-            `${stage}: bootstrap ${b.timedOut ? "timed out" : `failed (exit ${b.status})`}: ${tail(`${b.stderr}\n${b.stdout}`)}`,
-          );
-        mkdirSync(join(worktree, ".autoclaude", "state"), { recursive: true });
-        writeFileSync(marker, `${ctx.now().toISOString()}\n`);
-      }
+      const failed = await bootstrapWorktree(cfg, worktree, ctx.now());
+      if (failed !== null) return stopped(`${stage}: ${failed}`);
     }
 
     const runDir = nextRunDir(root, issue, stage);

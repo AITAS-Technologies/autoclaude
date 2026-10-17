@@ -26,6 +26,8 @@ import {
   parsePlanReport,
   parsePlanReviewReport,
 } from "../engine/review/reports.js";
+import type { ProjectConfig } from "../config/types.js";
+import { resolveRepo } from "../forge/github.js";
 import { removeWorktree } from "../engine/worktree.js";
 import { isArgumentError, messageOf, realEnv, usageError, type Env } from "./common.js";
 import type { Io } from "./main.js";
@@ -349,7 +351,8 @@ export async function publishVerb(
 
 // --- post-review -----------------------------------------------------------
 
-const POST_USAGE = "usage: autoclaude post-review <pr> --report <path> --sha <sha>";
+const POST_USAGE =
+  "usage: autoclaude post-review <pr> --report <path> --sha <sha> [--repo <owner/name>]";
 
 export interface PostReviewVerbDeps {
   postReview: (pr: number, text: string, sha: string) => { code: number; message: string };
@@ -371,12 +374,23 @@ export async function postReviewVerb(
     if (deps) r = deps.postReview(parsed.pr, text, parsed.sha);
     else {
       const root = env.root(cwd);
-      const cfg = env.config(root);
-      r = postReview(parsed.pr, text, parsed.sha, env.exec, {
-        cfg,
-        root,
-        repo: env.forge(cfg, root).repo,
-      });
+      // A configuration that cannot be read must not stop the review being posted: the
+      // poster degrades (default messages, no decision) and only needs a repository, which
+      // is then `--repo` or the URL of `origin`.
+      let cfg: ProjectConfig | undefined;
+      let configProblem: string | null = null;
+      try {
+        cfg = env.config(root);
+      } catch (e) {
+        configProblem = messageOf(e);
+      }
+      const repo =
+        flag(args, "--repo") ??
+        (cfg ? env.forge(cfg, root).repo : resolveRepo("origin", root, env.exec));
+      if (configProblem !== null)
+        io.err(`post-review: the configuration cannot be read (${foldNote(configProblem)}); posting without a decision
+`);
+      r = postReview(parsed.pr, text, parsed.sha, env.exec, { cfg, root, repo });
     }
     io.err(`${r.message}\n`);
     return r.code;

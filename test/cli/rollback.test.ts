@@ -98,8 +98,7 @@ function setup(
   // On disk as well as in the listing, which is the normal state and the one the gates
   // read: a registration whose directory is gone is now told from a live worktree by
   // `existsSync` rather than by a prune in the gate phase, so a fixture that never
-  // created the directory would have exercised only the stale half (maintainer's
-  // review, 8). The one test about a directory deleted by hand removes it again.
+  // created the directory would have exercised only the stale half. The one test about a directory deleted by hand removes it again.
   mkdirSync(worktree, { recursive: true });
   const ledger = emptyLedger("host/ada");
   if (opts.entry !== false) {
@@ -181,11 +180,11 @@ function fake(
     "git -c core.quotePath=false worktree remove": {},
     // The namespace listing `removeWorktree` makes, with the flags that keep a decorated
     // or columnised git config out of its parsing: keyed on the spelling with them, so a
-    // listing that lost either flag is answered by nothing (maintainer's review, minor 3).
+    // listing that lost either flag is answered by nothing.
     "git -c core.quotePath=false branch --no-color --no-column --list": {},
     // Every local branch, which is how the keep-branch-as gate compares a name against
     // the ref store rather than against git's own case-sensitive pattern match
-    // (maintainer's review, minor 5 / N7).
+    //.
     "git -c core.quotePath=false branch --no-color --format": {},
     "git -c core.quotePath=false branch -D": {},
     "git -c core.quotePath=false branch": {},
@@ -272,7 +271,7 @@ const removals = (calls: string[]) =>
 const mutations = (calls: string[]) =>
   calls.filter(
     (c) =>
-      /worktree (prune|remove)|branch -D|push origin --delete|gh -R S+ issue (edit|comment)/.test(
+      /worktree (prune|remove)|branch -D|push origin --delete|gh -R \S+ issue (edit|comment)/.test(
         c,
       ) || /^git (-c \S+ )?branch [^-]/.test(c),
   );
@@ -389,6 +388,21 @@ describe("rollback, the hand rollback of one agent run", () => {
     });
   });
 
+  it("clears the leftovers of a finished ledger entry without releasing it again", () => {
+    const { root } = setup({ state: "blocked" });
+    const f = fake(root);
+    const r = rollback(9, { to: null, reason: "" }, deps(root, f.exec));
+    expect(r).toMatchObject({
+      kind: "done",
+      released: false,
+      worktreeRemoved: true,
+      ledgerState: null,
+    });
+    expect(f.calls.some((c) => c.includes(" issue "))).toBe(false);
+    // The entry is left as it was.
+    expect(loadLedger(root, "host/ada").issues["9"]!.state).toBe("blocked");
+  });
+
   it("refuses to clear a run the ledger holds without being told where it goes", () => {
     const { root } = setup();
     const f = fake(root);
@@ -407,7 +421,7 @@ describe("rollback, the hand rollback of one agent run", () => {
    * and the stage guard cannot either, because the push is a child process of an
    * stage-allowed verb. A mistyped row is enough; so is
    * `autoclaude ledger set 9 claimed --branch develop`, which the ledger used to store unvalidated
-   * (maintainer's review, S1).
+   *.
    */
   it("refuses a row whose branch is outside the agent namespace, with no push and no release", () => {
     // The porcelain lists the main directory only: no registration, so the name the
@@ -424,12 +438,12 @@ describe("rollback, the hand rollback of one agent run", () => {
       "agent/8-other",
       // A refspec passes a prefix check, and `publish.ts` pushed the stored name verbatim:
       // `git push origin agent/9-x:develop` sends the rebased worktree branch to remote
-      // `develop` as a fast-forward, with no pull request; `:main` reaches production and
-      // its migration workflow. Refused where the name is read as well as where it is
-      // written (maintainer's review, S2).
+      // `develop` as a fast-forward, with no pull request; `:main` reaches production.
+      // Refused where the name is read as well as where it is
+      // written.
       "agent/9-x:develop",
       "agent/9-x:main",
-      // And a name git itself refuses as a ref: the remedies this script prints are
+      // And a name git itself refuses as a ref: the remedies this command prints are
       // pasted into a shell.
       "agent/9-x; rm -rf ~",
     ]) {
@@ -453,7 +467,7 @@ describe("rollback, the hand rollback of one agent run", () => {
       // And the row is untouched, so the correction is the operator's to make.
       expect(loadLedger(root, "host/ada").issues["9"]!.branch, branch).toBe(branch);
     }
-    // A name the issue's own prefix covers is what the script is for.
+    // A name the issue's own prefix covers is what the command is for.
     const ok = setup({ branch: "agent/9-x", worktree: "" });
     const g = fake(ok.root, noWorktree);
     expect(rollback(9, { to: "blocked", reason: "x" }, deps(ok.root, g.exec))).toMatchObject({
@@ -465,7 +479,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // `git` given a different cwd still fails with "the process cannot access the file
   // because it is in use by another process", and the directory stays. The worktree is a
   // natural place to be — `repoRoot()` resolves from anywhere inside it — and the failure
-  // would land after the release (whole-branch review, A16).
+  // would land after the release.
   it("refuses when it is run from inside the worktree it would remove, before anything runs", () => {
     const { root, worktree } = setup();
     const f = fake(root);
@@ -488,14 +502,14 @@ describe("rollback, the hand rollback of one agent run", () => {
   // typed: `Set-Location` to a lowercase spelling of an existing directory reports it
   // lowercase, `resolve` is lexical, and a case-sensitive comparison then said the process
   // was not in the directory it was standing in — both gates missed and the removal failed
-  // after the release, which is the outcome the gate exists to prevent (re-review, 1).
+  // after the release, which is the outcome the gate exists to prevent.
   //
   // Windows-only, and CI runs on Linux: this case has no leg in the pipeline that gates
   // the merge, so it is read-verified there and executed on the machine the orchestrator
   // actually runs on. Gating it is still right — `resolve(p).toLowerCase()` is a no-op
   // where the platform is case-sensitive, so the same assertion elsewhere would pass
   // whatever `inside()` did with the casing, which is worse than skipping
-  // (claude-bot review, 3).
+  //.
   it.runIf(process.platform === "win32")(
     "refuses from inside the worktree however the path is cased",
     () => {
@@ -513,7 +527,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // `ready` and `none` put the issue back within reach of a claim, and that happens
   // before the worktree, the branch and the ledger entry come down. An orchestrator
   // ticking in that window claims the issue and builds a second attempt on top of the
-  // first one's teardown (whole-branch review, A13).
+  // first one's teardown.
   it("refuses a release that reopens the issue while an orchestrator instance is live", () => {
     for (const to of ["ready", "none"] as const) {
       const { root } = setup({ session: "orc-2026-09-15" });
@@ -539,7 +553,7 @@ describe("rollback, the hand rollback of one agent run", () => {
 
   // The other way out the message names has to work, or the message is worse than no
   // message: `autoclaude pause` writes PAUSED and never touches instance.json, so the gate above
-  // refused a release the operator had just done everything it asked (re-review, 2). A
+  // refused a release the operator had just done everything it asked. A
   // paused orchestrator takes no new work, which is the whole condition the gate is about.
   it("lets a release reopen the issue once the orchestrator is paused", () => {
     const { root } = setup({ session: "orc-2026-09-15" });
@@ -555,7 +569,7 @@ describe("rollback, the hand rollback of one agent run", () => {
     });
   });
 
-  // The defect this script exists for, on 2026-09-14: a run rolled back by hand kept a
+  // The defect this command exists for: a run rolled back by hand kept a
   // standing claim comment, because the release is the one step that shows nothing on
   // disk. So it goes first, and everything destructive after it.
   it("posts the release comment before any removal, so a failure later cannot leave the claim standing", () => {
@@ -576,8 +590,8 @@ describe("rollback, the hand rollback of one agent run", () => {
 
   // The release is two calls, the labels and then the comment. A throw between them used
   // to escape main() raw: the issue kept the released labels with no release marker —
-  // the standing-claim state this script exists to prevent — and the output said only
-  // what `gh` had said (whole-branch review, A14).
+  // the standing-claim state this command exists to prevent — and the output said only
+  // what `gh` had said.
   it("reports a release that failed part-way and runs nothing destructive", () => {
     const { root } = setup();
     const f = fake(root, { "gh -R acme/widgets issue comment": { status: 1 } });
@@ -639,12 +653,12 @@ describe("rollback, the hand rollback of one agent run", () => {
    * wrote the new ref into the existing `refs/heads/agent/` directory, and
    * `removeWorktree`'s namespace loop then deleted the rescued copy while the result still
    * reported `keptBranchAs: "Agent/9-rescued"`. A capitalised typo is all it takes
-   * (maintainer's review, N7).
+   *.
    *
    * Windows-only and CI runs on Linux, the way the `inside()` case is gated: lower-casing
    * is a no-op where the platform is case-sensitive, so the same assertion elsewhere would
    * pass whatever the comparison did with the casing — which is worse than skipping
-   * (claude-bot review, 3).
+   *.
    */
   it.runIf(process.platform === "win32")(
     "refuses a keep-branch-as under the agent prefix however it is cased",
@@ -665,7 +679,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // `git branch <new> <old>` fails on a name that already exists, and it is the first
   // step *after* the release — so a taken name would stop a rollback half-done, with the
   // claim released, over something a gate can see before anything has happened
-  // (whole-branch review, minor).
+  //.
   it("refuses a keep-branch-as name that already exists and runs nothing", () => {
     const { root } = setup();
     const f = fake(root, {}, { localBranches: ["agent/9-x", "wip/9-rescued"] });
@@ -681,19 +695,19 @@ describe("rollback, the hand rollback of one agent run", () => {
   });
 
   /**
-   * And that gate compares the way the ref store does, which is the sibling of N7 one
-   * gate over.
+   * And that gate compares the way the ref store does, which is the sibling of the prefix
+   * comparison one gate over.
    *
    * `git branch --list Wip/9-rescued` matches nothing while `wip/9-rescued` exists, because
    * git's pattern match is case-sensitive and NTFS is not: the gate reported the name free,
    * `git branch` then either refused it after the release or wrote a second spelling into
    * the same ref file. The comparison is folded like `underPrefix`'s, and the refusal names
    * the branch that exists, so the `branch -D` it prints is a command that works
-   * (maintainer's review, minor 5).
+   *.
    *
    * Windows-only, the way the other two folded cases are gated: lower-casing is a no-op
    * where the platform is case-sensitive, so the same assertion elsewhere would pass
-   * whatever the comparison did with the casing (claude-bot review, 3).
+   * whatever the comparison did with the casing.
    */
   it.runIf(process.platform === "win32")(
     "refuses a keep-branch-as name that exists in another casing",
@@ -718,9 +732,8 @@ describe("rollback, the hand rollback of one agent run", () => {
    * was the incidental gate above: `develop` is checked out in the main working directory,
    * so a local branch of that name exists. `main` usually does not, and there the copy
    * succeeded: `git branch main agent/9-x` leaves the main directory one `git push origin
-   * main` away from shipping an agent branch to production and to the production migration
-   * workflow. Refused by name now, the way `notIssueBranch` refuses the same two
-   * (maintainer's review, minor 6).
+   * main` away from shipping an agent branch to production. Refused by name now, the way
+   * `notIssueBranch` refuses the same two.
    */
   it("refuses a keep-branch-as that names the integration or the production branch", () => {
     for (const name of ["develop", "main"]) {
@@ -739,7 +752,7 @@ describe("rollback, the hand rollback of one agent run", () => {
 
   // A free name is not the same as a legal one: `git branch --list "wip/9 rescued"`
   // matches nothing and reports the name as free, while `git branch` itself refuses it —
-  // after the release, as the first step (whole-branch review, A15).
+  // after the release, as the first step.
   it("refuses a keep-branch-as name git itself would reject", () => {
     const { root } = setup();
     const f = fake(root, { "git check-ref-format": { status: 1 } });
@@ -761,8 +774,8 @@ describe("rollback, the hand rollback of one agent run", () => {
     expect(r.kind === "refused" && r.refused).toContain("origin/agent/9-x");
     // Both halves of that printed remedy quoted, like every other printed value: the row
     // is a stored field, `git check-ref-format --branch` accepts `agent/9-x;rm` and
-    // `agent/9-$(id)` (measured, exit 0), and these two occurrences were the last raw ones
-    // while L413 and L499 quoted the same value (maintainer's review, N3).
+    // `agent/9-$(id)` (measured, exit 0), so every printed occurrence of it
+    // is quoted.
     const refused = r.kind === "refused" ? r.refused : "";
     expect(refused).toContain("git fetch origin 'agent/9-x'");
     expect(refused).toContain("git branch wip/9-rescued 'origin/agent/9-x'");
@@ -853,11 +866,11 @@ describe("rollback, the hand rollback of one agent run", () => {
     // step — `autoclaude note <issue> '<note>'` — reads the stage from the ledger, and
     // after `set … --stage none` there is none, so the scripted and the printed route
     // wrote different lines while the comment claimed they agreed
-    // (maintainer's review, 6).
+    //.
     expect(log[1]).toContain("#9 implement rollback to=blocked keep=- reason=wrong approach");
     // Then the scripted ledger step's transition, through the writer `ledger set`
     // uses, so the log carries the state change whichever way the step ran
-    // (whole-branch review, A12).
+    //.
     expect(log[2]).toContain(
       "state code-reviewing -> blocked: rollback to=blocked keep=- reason=wrong approach",
     );
@@ -881,8 +894,8 @@ describe("rollback, the hand rollback of one agent run", () => {
   // neither its `branch -D` nor its `push origin --delete` ever runs — and a rollback
   // that stopped at that left the branch on `origin`, where the next attempt's
   // `publish.ts` refuses to lease a remote head the new worktree never had. Reporting
-  // `remoteDeleted: false` and exiting 0 is the silent forgotten step this script exists
-  // to remove, so the step finishes the job itself (whole-branch review, Important 1).
+  // `remoteDeleted: false` and exiting 0 is the silent forgotten step this command exists
+  // to remove, so the step finishes the job itself.
   it("deletes the local and the remote branch itself when a stale registration ended the removal early", () => {
     const { root, worktree } = setup();
     // The directory, gone the way a human tidies one up; the registration stays.
@@ -898,7 +911,7 @@ describe("rollback, the hand rollback of one agent run", () => {
     // `removeWorktree` itself does these now, from the issue's own namespace rather than
     // from a registration it no longer has: `git branch --list agent/9-*`. The rollback
     // has no branch step of its own any more, and the orchestrator's teardown — the other
-    // caller — finishes the job for the first time (maintainer's review, 11).
+    // caller — finishes the job for the first time.
     expect(f.calls).toContain("git push origin --delete agent/9-x");
     expect(f.calls).toContain("git -c core.quotePath=false branch -D agent/9-x");
     expect(f.calls).toContain(
@@ -920,7 +933,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // a local branch still being there, and `removeWorktree` is the only
   // `push origin --delete` in the tree. A push that fails on something the tolerance does
   // not cover throws with `branch -D` already done, and the re-run the rollback prints
-  // then iterated an empty set and exited 0 (re-review of the fix round, Important 1).
+  // then iterated an empty set and exited 0.
   it("deletes the remote branch of the issue when nothing local names it any more", () => {
     const { root, worktree } = setup();
     rmSync(worktree, { recursive: true, force: true });
@@ -958,7 +971,7 @@ describe("rollback, the hand rollback of one agent run", () => {
    * deleted the branch, and a failure of that verification used to be reported as `false`
    * — "the branch is still on origin", which is a different thing from "I could not ask".
    * A human reading `remoteDeleted: false` goes looking for a branch that is gone
-   * (maintainer's review, N10).
+   *.
    */
   it("reports remoteDeleted as unknown when the verification call itself failed", () => {
     const { root } = setup();
@@ -979,8 +992,7 @@ describe("rollback, the hand rollback of one agent run", () => {
    * There is no branch for the field to be about, and the removal step deleted the issue's
    * whole remote namespace anyway — `removeWorktree` asks `origin` for `agent/9-*` rather
    * than for the row's name — so `false` was an answer about a branch the row did not name,
-   * and it reads as "the branch is still on origin". Three answers for three states, the
-   * way N10 split the verification failure out (maintainer's review, minor 7).
+   * and it reads as "the branch is still on origin". Three answers for three states.
    */
   it("reports remoteDeleted as not applicable when the row names no branch", () => {
     const { root } = setup({ branch: "", worktree: "" });
@@ -1033,7 +1045,7 @@ describe("rollback, the hand rollback of one agent run", () => {
     expect(r.kind === "refused" && r.refused).toMatch(
       /stage implement is running in orchestrator instance orc-live/,
     );
-    expect(r.kind === "refused" && r.refused).toMatch(/autoclaude service uninstall/);
+    expect(r.kind === "refused" && r.refused).toMatch(/autoclaude drain/);
     expect(removals(f.calls)).toEqual([]);
     expect(f.calls.some((c) => c.includes(" issue "))).toBe(false);
   });
@@ -1066,7 +1078,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // A run that died before it archived anything has no `runs/<issue>` — but the ledger
   // step's own line and the note create one, so a destination resolved before them was
   // null and left that archive behind: a "complete" rollback whose issue still had a live
-  // events log, holding nothing but its own rollback (review of this task, Important 3).
+  // events log, holding nothing but its own rollback.
   it("archives the run the rollback's own lines created, so it never leaves a live events log behind", () => {
     const { root } = setup({ runs: false });
     const f = fake(root);
@@ -1086,7 +1098,7 @@ describe("rollback, the hand rollback of one agent run", () => {
   // ledger event, the release comment, the printed commands and the log line carry one
   // text. Before that the ledger event kept the full 400 characters while the log line
   // was cut at 300, against the code's own claim that the two carry "the one line"
-  // (whole-branch review, A3).
+  //.
   it("folds a long reason once, so the ledger event and the log line say the same thing", () => {
     const { root } = setup();
     const f = fake(root);
@@ -1126,16 +1138,15 @@ describe("rollback, the hand rollback of one agent run", () => {
       // Both quote characters and a newline in the reason: the printed lines exist to be
       // copied into a shell, and the operator's own punctuation must not end the quoting
       // halfway. Single quotes are literal in both shells, and double quotes are not — a
-      // reason naming `$branch` or `$(…)` would be expanded on paste (whole-branch
-      // review, A17).
+      // reason naming `$branch` or `$(…)` would be expanded on paste.
       //
       // The escape inside them is bash's, `'\''`, because these lines are bash: the last
       // one is `mkdir -p … ; mv …`, and `mkdir -p` is a parameter error in PowerShell.
       // `''` is one apostrophe in PowerShell only; in Git Bash `'isn''t'` is three
       // concatenated tokens and prints `isnt`, so the reason a human pasted differed from
-      // the one the script had recorded — the disagreement `foldNote`/`rollbackNote` were
+      // the one the command had recorded — the disagreement `foldNote`/`rollbackNote` were
       // added to prevent. No literal works in both shells, so the printed block says
-      // which one it is quoted for (maintainer's review, N4).
+      // which one it is quoted for.
       { to: "ready", reason: 'the "plan" isn\'t it\n  $wrong', keepBranchAs: "wip/9-rescued" },
       deps(root, f.exec),
     );
@@ -1144,17 +1155,17 @@ describe("rollback, the hand rollback of one agent run", () => {
     const note = `rollback to=ready keep=wip/9-rescued reason=the "plan" isn'\\''t it $wrong`;
     expect(remaining).toEqual([
       // One command, and it finishes the job: the branch deletion the rollback used to
-      // do in a step of its own now lives in `removeWorktree`, so the script named here
+      // do in a step of its own now lives in `removeWorktree`, so the command named here
       // deletes the local and the remote branch even when the registration is already
       // gone — which is also what the orchestrator's own teardown calls
-      // (maintainer's review, 11).
+      //.
       "autoclaude worktree remove 9 --remote",
       // The note before the ledger step, in the printed route as in the scripted one.
       `autoclaude note 9 '${note}'`,
       `autoclaude ledger set 9 done --pr none --stage none --note '${note}'`,
       // `runs-old/` is created by the step itself, so the line that replaces it has to
       // create it too: on a first-ever rollback a bare `mv` fails with ENOENT, and that
-      // is the one line a human is handed (whole-branch review, A11).
+      // is the one line a human is handed.
       `mkdir -p '${join(stateDir(root), "runs-old")}' ; mv '${join(stateDir(root), "runs", "9")}' '${join(stateDir(root), "runs-old", `9-${TODAY}`)}'`,
     ]);
     // The step that failed is named, and the copy that had already succeeded is not
@@ -1185,10 +1196,10 @@ describe("rollback, the hand rollback of one agent run", () => {
    *
    * `quoted()` is bash's `'\''` and no literal is right in both shells: in Git Bash
    * `'isn''t'` prints `isnt`, so a reason pasted from a message that does not say which
-   * shell it is for is not the reason the script recorded. The two block printers say so
+   * shell it is for is not the reason the command recorded. The two block printers say so
    * and these four did not — and a refusal is the more likely of the two to be pasted,
    * because it is what an operator meets before anything has happened
-   * (maintainer's review, minor 4).
+   *.
    */
   it("says which shell the quoting is for in every refusal that prints a command", () => {
     const noWorktree = {
@@ -1266,9 +1277,12 @@ describe("the rollback verb's exit", () => {
       ledgerState: "blocked",
     });
     const again = capture();
-    // The entry is in the ledger now; clearing it without saying where it goes is refused.
-    expect(await rollbackVerb(["9"], again.io, root, env)).toBe(1);
-    expect(again.errText()).toMatch(/autoclaude rollback 9 --to/);
+    // The run is finished (blocked) now: the engine's remedy `autoclaude rollback 9` clears
+    // what is left without releasing it a second time.
+    const comments = () => f.calls.filter((c) => c.includes(" issue comment")).length;
+    expect(comments()).toBe(1);
+    expect(await rollbackVerb(["9"], again.io, root, env)).toBe(0);
+    expect(comments()).toBe(1);
     const bad = capture();
     expect(await rollbackVerb(["9", "--to", "blocked"], bad.io, root, env)).toBe(64);
     expect(bad.errText()).toMatch(/usage: autoclaude rollback/);
@@ -1306,7 +1320,7 @@ describe("parseRollbackArgs", () => {
   // on the one command in the tree whose next step is destructive —
   // `autoclaude rollback 9 --to blocked --reason x --to ready`, an operator editing a recalled
   // line, released as blocked and deleted the branches with the typed `ready` silently
-  // dropped (maintainer's review, 7).
+  // dropped.
   it("refuses a flag given twice rather than taking the first one", () => {
     expect(() =>
       parseRollbackArgs(["9", "--to", "blocked", "--reason", "x", "--to", "ready"]),

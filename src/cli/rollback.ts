@@ -33,6 +33,7 @@ import {
   foldNote,
   loadLedger,
   machineId,
+  TERMINAL,
   runDir,
   transition,
   transitionText,
@@ -273,9 +274,10 @@ export function rollback(issue: number, opts: RollbackOpts, deps: RollbackDeps):
   }
   const ledger = loadLedger(root, machine);
   const entry = ledger.issues[String(issue)];
-  // An entry is a run this machine owns: it is released with the ledger, so `--to` is needed.
-  // Without an entry there is only leftover state to clear.
-  if (entry && opts.to === null) {
+  // A live entry is a run this machine owns: it is released with the ledger, so `--to` is
+  // needed. Without an entry, or with a finished one (its release was already posted), there
+  // is only leftover state to clear, and nothing is released twice.
+  if (entry && opts.to === null && !TERMINAL.has(entry.state)) {
     return refuse(
       `issue ${issue} is in this machine's ledger (${entry.state}); give --to <target> and --reason <text> so the run is released with its worktree: autoclaude rollback ${issue} --to blocked --reason "<why>"`,
     );
@@ -296,7 +298,7 @@ export function rollback(issue: number, opts: RollbackOpts, deps: RollbackDeps):
   // nothing: that is the state a rollback is most often needed in.
   if (entry?.stage && live !== null && entry.stage.instance === live.instance) {
     return refuse(
-      `issue ${issue}: stage ${entry.stage.stage} is running in orchestrator instance ${live.instance} (pid ${live.pid}); stop the orchestrator (end the autoclaude run process, or autoclaude service uninstall) or wait for the stage to finish, then run this again`,
+      `issue ${issue}: stage ${entry.stage.stage} is running in orchestrator instance ${live.instance} (pid ${live.pid}); run autoclaude drain, wait until autoclaude status shows the stage finished, then run this again`,
     );
   }
 
