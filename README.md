@@ -72,23 +72,23 @@ autoclaude run              # the orchestrator in the foreground; --once does a 
 autoclaude service install  # start it at logon (Windows task, macOS launchd, Linux systemd user unit)
 ```
 
-`autoclaude service status` and `autoclaude service uninstall` complete the set. There is one service per project.
+On Linux, run `loginctl enable-linger $USER` once to keep the user unit running while you are logged out. `autoclaude service status` and `autoclaude service uninstall` complete the set. There is one service per project.
 
 ## Everyday commands
 
-| Command                                 | What it does                                        |
-| --------------------------------------- | --------------------------------------------------- |
-| `autoclaude status`                     | The ledger and the gates of every open pull request |
-| `autoclaude watch`                      | Follow a run in the terminal                        |
-| `autoclaude pause`, `drain`, `resume`   | Stop taking work, finish what runs, or continue     |
-| `autoclaude triage [--issue <n>]`       | Triage now                                          |
-| `autoclaude review --pr <n>`            | The code review on an open pull request             |
-| `autoclaude can-merge <pr>`             | The merge verdict for a pull request                |
-| `autoclaude rollback <issue>`           | Release a run and clear its worktree and branches   |
-| `autoclaude gates [--fix] [--only a,b]` | Run the project's quality gates                     |
-| `autoclaude situation`                  | What the next tick sees, as JSON                    |
+| Command                                                         | What it does                                        |
+| --------------------------------------------------------------- | --------------------------------------------------- |
+| `autoclaude status`                                             | The ledger and the gates of every open pull request |
+| `autoclaude watch`                                              | Follow a run in the terminal                        |
+| `autoclaude pause`, `drain`, `resume`                           | Stop taking work, finish what runs, or continue     |
+| `autoclaude triage [--issue <n>]`                               | Triage now                                          |
+| `autoclaude review --pr <n>`                                    | The code review on an open pull request             |
+| `autoclaude can-merge <pr>`                                     | The merge verdict for a pull request                |
+| `autoclaude rollback <issue> [--to <target> --reason "<text>"]` | Release a run and clear its worktree and branches   |
+| `autoclaude gates [--fix] [--only a,b]`                         | Run the project's quality gates                     |
+| `autoclaude situation`                                          | What the next tick sees, as JSON                    |
 
-`autoclaude --help` lists every verb. Some of them (`claim`, `publish`, `ledger`, ...) are the engine's own steps, exposed for stages and for debugging.
+`rollback` takes `--to` (one of `blocked`, `needs-shaping`, `ready`, `done`, `none`) and `--reason` together to release the claim; `--keep-branch-as <name>` keeps the branch under another name. `autoclaude --help` lists every verb. Some of them (`claim`, `publish`, `ledger`, ...) are the engine's own steps, exposed for stages and for debugging.
 
 ## Update
 
@@ -98,7 +98,7 @@ npm ci
 npm run build
 ```
 
-The service runs the built files in your checkout, so it uses the new build the next time it starts (at the next logon, or when you restart it).
+The service runs the built files in your checkout, so it uses the new build the next time it starts (at the next logon, or when you restart it). A running service keeps the old code until it is restarted. The node binary and the checkout path are baked into the service definition, so if either changes, run `autoclaude service install` again.
 
 ## Uninstall
 

@@ -70,11 +70,11 @@ Practical advice: log `gh` in with a token that cannot delete repositories (`doc
 The guard reads text; it does not run or sandbox anything. These are the places where it deliberately does not look, and each is covered by the other two layers:
 
 - It does not reach interpreters. A command such as `python -c "..."` or `perl -e "..."`, and some package-runner forms, run code the guard cannot read. The stage environment still has no forge credential for that code to use, and the permission layer still limits the Claude Code tools, but code that runs as your user is within the residual risk above.
-- It does not model environment changes that alter how later commands resolve, such as `PATH=...;` or `export GIT_DIR=...` as a separate command. The stage environment starts without the variables the guard cannot model, and layers 1 and 2 are unchanged by such a command.
+- It does not model environment changes that alter how later commands resolve, such as `PATH=...;` or `export GIT_DIR=...` as a separate command. Layer 1 only sets the environment a stage starts with; code the stage runs can change its own environment afterwards, and that falls under the residual risk above.
 - It does not inspect the bodies of here-documents.
 - It leaves `tee`, `cp` and `rm` to the permission layer. What those commands can write is therefore bounded by Claude Code's permission rules and by your operating system's file permissions, not by the guard.
 
-None of these is a way around layer 1: a stage process has no forge credential in its environment however it is started. They matter for what the model can do on your machine, which is the residual risk described above.
+A stage starts with an environment that has no forge credentials. Code that a stage runs can still change its own environment or read your files, and that is the residual risk described above; these limitations add to it only in what the guard fails to refuse.
 
 ## Reporting a vulnerability
 
