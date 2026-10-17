@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { VERSION } from "../version.js";
 import { gatesVerb } from "./gates.js";
 import { guardVerb } from "./guard.js";
+import { runVerb } from "./run.js";
 
 export interface Io {
   out(s: string): void;
@@ -17,10 +18,11 @@ export type Verb = (args: string[], io: Io) => Promise<number>;
 export const VERBS: Record<string, Verb> = {
   gates: (args, io) => gatesVerb(args, io, process.cwd()),
   guard: (args, io) => guardVerb(args, io),
+  run: (args, io) => runVerb(args, io, process.cwd()),
 };
 
 const USAGE =
-  "usage: autoclaude <verb> [options]\n\nverbs:\n  gates      run the project quality gates\n  guard      the PreToolUse hook of a stage (pending call on stdin)\n\n  --version  print the version\n  --help     print this text\n";
+  "usage: autoclaude <verb> [options]\n\nverbs:\n  gates      run the project quality gates\n  guard      the PreToolUse hook of a stage (pending call on stdin)\n  run        the orchestrator: tick until drained or stopped [--once]\n\n  --version  print the version\n  --help     print this text\n";
 
 const defaultIo: Io = {
   out: (s) => void process.stdout.write(s),
