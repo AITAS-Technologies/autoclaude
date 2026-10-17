@@ -1030,7 +1030,7 @@ describe("tick: Step 4 and the control files", () => {
     });
   });
 
-  // F1: a `worktrees.copy` entry the creation skipped is on the issue's events log, reason and all.
+  // A `worktrees.copy` entry the creation skipped is on the issue's events log, reason and all.
   it("notes every worktrees.copy entry the creation skipped", async () => {
     const r = rig();
     r.issues.set(12, r.issue(12, { labels: [{ name: "agent-ready" }] }));
@@ -1208,7 +1208,7 @@ describe("triage applied by the engine", () => {
     expect(posted[0]).not.toContain("[skip ci]");
   });
 
-  // F10: a model-written comment quoting a claim marker was the earliest active claim of its
+  // R73: a model-written comment quoting a claim marker was the earliest active claim of its
   // issue, and every later claim lost. The engine's own triage marker still reads back.
   it("breaks an engine marker the model wrote, and keeps the engine's own", async () => {
     const r = rig();

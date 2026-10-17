@@ -890,7 +890,7 @@ describe("Step 3: pull requests with no running stage", () => {
     expect(one(skipped, "comment").body).toMatch(/skip marker in the commit subject or a paths filter/); // prettier-ignore
   });
 
-  // F11: a matrix job reports as `test (ubuntu-latest)`, never as `test`. Same actions, but the
+  // R73: a matrix job reports as `test (ubuntu-latest)`, never as `test`. Same actions, but the
   // message names the checks that did report, so the user can correct `requiredChecks`.
   it("check 2 silent while other checks reported under no required name — says which did report", () => {
     const rollup = [node("test (ubuntu-latest)", "SUCCESS"), node("test (windows-latest)", "SUCCESS"), node("lint", "SUCCESS")]; // prettier-ignore

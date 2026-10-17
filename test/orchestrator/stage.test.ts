@@ -69,7 +69,7 @@ function rig(edit?: (cfg: ProjectConfig) => void): Rig {
     comments: [{ author: { login: "octo" }, body: "A comment", createdAt: "2026-01-02T00:00:00Z" }],
   };
   const exec: Exec = (cmd, args, opts) => {
-    // One git directory, whichever checkout asks (F9).
+    // One git directory, whichever checkout asks (R73).
     if (cmd === "git" && args.includes("--git-common-dir"))
       return { status: 0, stdout: `${join(root, ".git")}\n`, stderr: "" };
     if (cmd === "git" && args[0] === "fetch") {
@@ -391,7 +391,7 @@ describe("runStage", () => {
     expect(r.notes.join("\n")).toMatch(/fetch.*no network/is);
   });
 
-  // F9: a stage that rewrote the worktree's `.git` would point the engine's credentialed fetch
+  // R73: a stage that rewrote the worktree's `.git` would point the engine's credentialed fetch
   // at a git directory of its choosing.
   it("neither fetches nor spawns in a worktree whose git directory is not the project's", async () => {
     const r = rig();

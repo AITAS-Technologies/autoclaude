@@ -212,7 +212,7 @@ describe("claudeSettings", () => {
     expect(d).not.toContain("Edit(//home/u/work tree/ci/*.yml/**)");
   });
 
-  // F9: the worktree's `.git` names the git directory the engine's credentialed fetch, rebase
+  // R73: the worktree's `.git` names the git directory the engine's credentialed fetch, rebase
   // and push run against. Both spellings, for both writing tools, in a read-only stage too.
   it("denies writing the worktree's .git, as a file and as a directory", () => {
     for (const readOnly of [false, true]) {

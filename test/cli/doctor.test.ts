@@ -340,7 +340,7 @@ describe("autoclaude doctor", () => {
     expect(verb).toBeTypeOf("function");
   });
 
-  // F12: the fence refuses a worktree under a path with permission-rule syntax, so every
+  // R73: the fence refuses a worktree under a path with permission-rule syntax, so every
   // claimed issue would spend its retries on the refusal. doctor fails first, naming both.
   it("fails, naming the character and the path, when worktrees.root holds rule syntax", async () => {
     const root = await healthyRepo();

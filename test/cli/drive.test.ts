@@ -526,7 +526,7 @@ describe("autoclaude review --pr", () => {
     expect(r.calls[0]).toMatchObject({ secret: true, bootstraps: 1 });
     // R69: the head is a stage's work, so its bootstrap ran in the stage environment.
     expect(r.calls[0]!.bootLog).toBe("ran 1");
-    // F1: an entry the copy skipped is said on stderr, not dropped.
+    // An entry the copy skipped is said on stderr, not dropped.
     expect(c.errText()).toContain(
       "worktrees.copy: absent.env was not copied: the project root has no such file",
     );

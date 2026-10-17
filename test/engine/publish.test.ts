@@ -83,7 +83,7 @@ const cfg = {
   messages: { footer: "Posted by the test footer", defuseMentions: true },
 } as unknown as ProjectConfig;
 
-// F10: the engine reads its own HTML comment markers back from GitHub, so a model-written one
+// R73: the engine reads its own HTML comment markers back from GitHub, so a model-written one
 // in anything it posts must reach GitHub broken, rendered as text and matched by no parser.
 describe("presentText and the engine's markers", () => {
   const forged = claimBody("evil/box", "2020-01-01T00:00:00.000Z");
@@ -574,7 +574,7 @@ describe("publish, the step from a reviewed worktree to a pull request", () => {
     const stdin: Record<string, string> = {};
     const answers: Record<string, { status?: number; stdout?: string }> = {
       "git -c core.quotePath=false fetch": {},
-      // One git directory for the root and the worktree alike (F9).
+      // One git directory for the root and the worktree alike (R73).
       "git rev-parse --git-common-dir": { stdout: "/repo/.git\n" },
       "git -c core.quotePath=false rev-parse HEAD": { stdout: "abc123\n" },
       "git rebase": {},
@@ -768,7 +768,7 @@ describe("publish, the step from a reviewed worktree to a pull request", () => {
     }
   });
 
-  // F9: the fetch, the rebase and the push carry the engine's credentials; a worktree whose
+  // R73: the fetch, the rebase and the push carry the engine's credentials; a worktree whose
   // `.git` a stage pointed at another git directory gets none of them.
   it("refuses before the fetch when the worktree's git directory is not the project's", () => {
     const { root, wt } = setup();

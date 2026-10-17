@@ -135,7 +135,7 @@ export async function runStage(
     adapter = ctx.runtimes(spec.runtime);
 
     if (!triage) {
-      // Not into a git directory a stage chose by rewriting the worktree's `.git` (F9).
+      // Not into a git directory a stage chose by rewriting the worktree's `.git` (R73).
       const foreign = foreignGitDir(root, worktree, ctx.exec);
       if (foreign !== null) return stopped(`${stage}: ${foreign}`);
       // The engine fetches; a stage never does. A stage on a stale base is worse than no stage.

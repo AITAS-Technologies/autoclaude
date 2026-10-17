@@ -69,7 +69,7 @@ export function reviewRig(opts: RigOptions = {}): ReviewRig {
   const exec: Exec = (cmd, args, o) => {
     calls.push({ cmd, args, cwd: o?.cwd, input: o?.input });
     if (cmd === "git" && args.includes("fetch")) return { status: 0, stdout: "", stderr: "" };
-    // One git directory, whichever checkout asks (F9).
+    // One git directory, whichever checkout asks (R73).
     if (cmd === "git" && args.includes("--git-common-dir"))
       return { status: 0, stdout: `${join(root, ".git")}\n`, stderr: "" };
     if (cmd === "git" && args.includes("rev-parse"))

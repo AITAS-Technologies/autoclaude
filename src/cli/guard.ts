@@ -43,9 +43,9 @@ export const DEFAULT_DEPS: GuardDeps = {
  * A PreToolUse hook blocks on exit 2 and only on exit 2, so this returns 0 only when
  * `claudeHook` proved the command allowed. Every other outcome is 2 with a reason on
  * stderr: a missing or repeated flag, an unknown runtime, an unreadable stdin, a root or a
- * configuration that cannot be loaded, a git call that did not answer within 15 s. The configuration is read from the main checkout of
- * the worktree (ruling R28), never the worktree's own copy, so a stage cannot loosen the
- * fence it runs under.
+ * configuration that cannot be loaded, a git call that did not answer within 15 s. The
+ * configuration is read from the main checkout of the worktree (ruling R28), never the
+ * worktree's own copy, so a stage cannot loosen the fence it runs under.
  */
 export async function guardVerb(
   args: string[],

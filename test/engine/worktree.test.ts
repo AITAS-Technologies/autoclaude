@@ -183,7 +183,7 @@ describe("create and remove, against a real temporary repository", () => {
     removeWorktree(root, 4, cfg, { deleteRemote: false });
   }, 60_000);
 
-  // F1: `cpSync` of a directory killed the process on Windows with Node 24 (0xC0000409) when
+  // `cpSync` of a directory killed the process on Windows with Node 24 (0xC0000409) when
   // the source path held a non-ASCII character, and copied nothing when only the destination
   // did. This runs on every CI OS, Windows included, with both paths non-ASCII.
   it("copies a directory entry under a non-ASCII project root into a non-ASCII worktree root", () => {
@@ -201,7 +201,7 @@ describe("create and remove, against a real temporary repository", () => {
     removeWorktree(root, 6, local, { deleteRemote: false });
   }, 60_000);
 
-  // F1 / C4: a link is never followed. One to outside the project would carry that file in.
+  // A link is never followed (a deferred C4 minor, closed with the copy walk). One to outside the project would carry that file in.
   it("skips a symbolic link, as an entry and inside a directory entry, and says why", (t) => {
     const { tmp, root } = repo("autoclaude-wt-link-");
     const outside = join(tmp, "outside");
@@ -231,7 +231,7 @@ describe("create and remove, against a real temporary repository", () => {
     removeWorktree(root, 3, local, { deleteRemote: false });
   }, 60_000);
 
-  // F1: a copy that fails is a failed creation, undone like a failed `worktree add`.
+  // A copy that fails is a failed creation, undone like a failed `worktree add`.
   it("fails the creation when a copy fails, and leaves no worktree or branch behind", () => {
     const { root } = repo("autoclaude-wt-copyfail-");
     // The integration branch has a file `conf`; the main checkout has a directory there now,
@@ -251,7 +251,7 @@ describe("create and remove, against a real temporary repository", () => {
     expect(sh(root, "branch", "--list", "agent/2-copy-fails")).toBe("");
   }, 60_000);
 
-  // F9: before the engine fetches, rebases or pushes in a worktree, git is asked which git
+  // R73: before the engine fetches, rebases or pushes in a worktree, git is asked which git
   // directory the worktree uses; a `.git` file a stage pointed elsewhere is refused.
   it("tells a worktree of this project from one whose .git points at another git directory", () => {
     const { tmp, root } = repo("autoclaude-wt-gitdir-");

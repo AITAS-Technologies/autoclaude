@@ -1,5 +1,5 @@
 /**
- * The hook's git call has a limit of its own (F8). The hook entry's watchdog is a timer, and a
+ * The hook's git call has a limit of its own (R73). The hook entry's watchdog is a timer, and a
  * timer cannot fire during a synchronous `git`; a call that outlived Claude Code's hook timeout
  * would be read as "allow". `runSync` is wrapped, not replaced: one case answers its call itself.
  */

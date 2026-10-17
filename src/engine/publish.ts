@@ -624,7 +624,7 @@ export function publish(issue: number, update: boolean, deps: PublishDeps): Publ
 
   // 3. Rebase onto the current integration tip, and prove it. Not in a worktree whose `.git` a
   //    stage pointed elsewhere: the fetch, the rebase and the push below carry the credentials
-  //    (F9).
+  //    (R73).
   const foreign = foreignGitDir(root, wt, exec);
   if (foreign !== null) throw new Error(`issue ${issue}: ${foreign}; refusing to push`);
   gitIn(["fetch", remote, cfg.branches.integration, "--quiet"]);

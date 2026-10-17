@@ -25,7 +25,7 @@ export const POSIX_START_TOLERANCE_MS = 2_000;
 export interface InstanceFile {
   instance: string;
   pid: number;
-  /** The process start time `processStartTime` reported; null in a file written before it was kept. */
+  /** The process start time `processStartTime` reported; null in a file from before it was kept. */
   startedAt: string | null;
   heartbeatAt: string;
 }

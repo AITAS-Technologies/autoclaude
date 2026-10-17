@@ -148,7 +148,7 @@ export async function runCodeReview(
   };
 
   // Step 0: the engine fetches; a stage never does. Not into a git directory a stage chose by
-  // rewriting the worktree's `.git` (F9).
+  // rewriting the worktree's `.git` (R73).
   const foreign = foreignGitDir(ctx.root, worktree, ctx.exec);
   if (foreign !== null) return stoppedEarly(foreign);
   const fetched = ctx.exec("git", ["fetch", cfg.forge.remote, cfg.branches.integration], {

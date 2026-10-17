@@ -395,7 +395,7 @@ export function parseCreateArgs(rest: string[]): { title: string; replace: boole
 }
 
 /**
- * Why the engine must not run its fetch, rebase or push in `worktree`, or null when it may (F9).
+ * Why the engine must not run its fetch, rebase or push in `worktree`, or null when it may (R73).
  *
  * In a linked worktree `.git` is a file naming the git directory. A stage that rewrote it would
  * point the engine's credentialed git calls, and the hooks and config those read, at a

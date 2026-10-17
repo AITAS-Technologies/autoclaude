@@ -70,9 +70,7 @@ export async function issueVerb(
       // Taken over all the same: stop at once, never drain into the other instance's ledger (R68).
       handle = acquireInstance(root, { ...deps.instance, onLost: () => lost.abort() });
     } catch (e) {
-      io.err(
-        `${messageOf(e)}; once autoclaude status shows nothing running, run this again\n`,
-      );
+      io.err(`${messageOf(e)}; once autoclaude status shows nothing running, run this again\n`);
       return 1;
     }
     ctx = deps.context(root, handle.instance);
