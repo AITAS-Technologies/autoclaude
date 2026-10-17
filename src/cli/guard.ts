@@ -19,7 +19,21 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-const DEFAULT_DEPS: GuardDeps = { stdin: readStdin, root: repoRoot, load: loadProjectConfig };
+/**
+ * The limit of the hook's git call. The call is synchronous, so the hook entry's watchdog cannot
+ * interrupt it; this limit is what does, well inside Claude Code's hook timeout, which reads a
+ * hook that never answered as "allow".
+ */
+export const HOOK_GIT_TIMEOUT_MS = 15_000;
+
+/** The main checkout of the worktree, asked of git within the hook's limit; a timeout throws. */
+export const hookRoot = (cwd: string): string => repoRoot(cwd, { timeoutMs: HOOK_GIT_TIMEOUT_MS });
+
+export const DEFAULT_DEPS: GuardDeps = {
+  stdin: readStdin,
+  root: hookRoot,
+  load: loadProjectConfig,
+};
 
 /**
  * `autoclaude guard --runtime claude --worktree <path>`: the process Claude Code starts
@@ -29,7 +43,7 @@ const DEFAULT_DEPS: GuardDeps = { stdin: readStdin, root: repoRoot, load: loadPr
  * A PreToolUse hook blocks on exit 2 and only on exit 2, so this returns 0 only when
  * `claudeHook` proved the command allowed. Every other outcome is 2 with a reason on
  * stderr: a missing or repeated flag, an unknown runtime, an unreadable stdin, a root or a
- * configuration that cannot be loaded. The configuration is read from the main checkout of
+ * configuration that cannot be loaded, a git call that did not answer within 15 s. The configuration is read from the main checkout of
  * the worktree (ruling R28), never the worktree's own copy, so a stage cannot loosen the
  * fence it runs under.
  */

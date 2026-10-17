@@ -23,9 +23,13 @@ function fail(reason: unknown): never {
 }
 
 /**
- * A guard that hangs (stdin never closes, git stalls inside repoRoot) must block: Claude
- * Code treats a hook timeout as non-blocking, so this fires first (the generated settings
- * give the hook a longer `timeout`). Design § 7.5: a timeout is a refusal.
+ * A guard that hangs must block: Claude Code treats a hook timeout as non-blocking, so this
+ * fires first (the generated settings give the hook a longer `timeout`). Design § 7.5: a
+ * timeout is a refusal.
+ *
+ * It covers what waits on the event loop, a stdin that never closes above all. It cannot
+ * interrupt a synchronous call: the root lookup's git runs with a 15 s limit of its own
+ * (`HOOK_GIT_TIMEOUT_MS`), and a timeout there is a refusal (exit 2) like any other error.
  */
 export const WATCHDOG_MS = 20_000;
 setTimeout(

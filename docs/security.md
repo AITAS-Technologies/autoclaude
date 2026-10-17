@@ -55,7 +55,7 @@ The guard reads the command as POSIX shell text, splits it into simple commands 
 - a program name that the shell would decide (an expansion, substitution or glob in the command word);
 - a redirection that writes outside the worktree or into a forbidden path, and a `cd` that leaves the worktree.
 
-The hook fails closed. The hook line ends in `|| exit 2`, because a hook blocks only on exit code 2 and a Node process that cannot start exits 1 or 127. The guard has a 20 second watchdog that turns "no answer" into a refusal, and the hook has a 30 second timeout above it. An exception, unparsable input or a broken configuration is a refusal. The entry point calls the guard unconditionally, so no spelling of a path can skip it.
+The hook fails closed. The hook line ends in `|| exit 2`, because a hook blocks only on exit code 2 and a Node process that cannot start exits 1 or 127. The guard has a 20 second watchdog that turns "no answer" into a refusal, and the hook has a 30 second timeout above it. The watchdog cannot interrupt the guard's one git call, which is synchronous, so that call has a 15 second limit of its own; a timeout is a refusal too. An exception, unparsable input or a broken configuration is a refusal. The entry point calls the guard unconditionally, so no spelling of a path can skip it.
 
 ## The residual risk
 
