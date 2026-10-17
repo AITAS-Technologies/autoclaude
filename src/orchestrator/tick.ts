@@ -172,15 +172,19 @@ interface Run {
   limited: boolean;
   /** Shutting down: asked again before every dispatch, so an in-flight tick stops taking work. */
   hold: () => boolean;
+  /** The instance was lost: asked before every row, so an in-flight tick acts on nothing more. */
+  halted: () => boolean;
 }
 
 export interface TickOptions {
   /** True while the loop is shutting down: settle what ran, start nothing new. */
   noNewWork?: () => boolean;
+  /** True once another instance took the project over (R68): no row is acted on after it. */
+  halt?: () => boolean;
 }
 
-/** Nothing may be dispatched now: a usage limit, or a shutdown in progress. */
-const held = (run: Run) => run.limited || run.hold();
+/** Nothing may be dispatched now: a usage limit, a shutdown in progress, a lost instance. */
+const held = (run: Run) => run.limited || run.hold() || run.halted();
 
 const why = (error: unknown) => foldNote(error instanceof Error ? error.message : String(error));
 
@@ -191,7 +195,8 @@ function failed(run: Run, issue: number, error: unknown): void {
 }
 
 async function apply(run: Run, issue: number, actions: Action[]): Promise<void> {
-  if (actions.length === 0) return;
+  // The ledger is another instance's once this one is lost: nothing more is written to it.
+  if (actions.length === 0 || run.halted()) return;
   run.touched.add(issue);
   try {
     run.changed.push(`#${issue}: ${(await execute(run.ctx, issue, actions)).join("; ")}`);
@@ -377,6 +382,7 @@ export async function tick(ctx: TickCtx, opts: TickOptions = {}): Promise<TickSu
     touched: new Set(),
     limited: future(situation.limitedUntil, now),
     hold: opts.noNewWork ?? (() => false),
+    halted: opts.halt ?? (() => false),
   };
 
   const handOver = await step2(run, situation.issues);

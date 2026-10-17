@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -162,5 +162,26 @@ describe("autoclaude run", () => {
     r.signals.emit("SIGINT");
     expect(await code).toBe(0);
     expect(r.signals.listenerCount("SIGINT")).toBe(0);
+  }, 20_000);
+
+  // R68: a run whose instance file another instance replaced stops at once and says so.
+  it("exits 1 with its message when another instance takes the project over", async () => {
+    let ticks = 0;
+    const r = rig((ctx) => {
+      ticks++;
+      return { ...draining(ctx), control: { paused: true, draining: false } };
+    });
+    r.deps.instance = { heartbeatMs: 20 };
+    const code = runVerb([], r.io, "x", r.deps);
+    await new Promise((res) => setTimeout(res, 300));
+    const at = new Date().toISOString();
+    const foreign = JSON.stringify({ instance: "other", pid: 1, heartbeatAt: at });
+    writeFileSync(instanceFile(r.root), foreign);
+    expect(await code).toBe(1);
+    expect(r.err.join("")).toMatch(/another autoclaude instance took this project over/);
+    expect(ticks, "no tick after the loss").toBe(1);
+    expect(readFileSync(instanceFile(r.root), "utf8"), "the other's file is left alone").toBe(
+      foreign,
+    );
   }, 20_000);
 });

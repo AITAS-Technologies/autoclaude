@@ -1,12 +1,14 @@
 /**
  * One orchestrator instance per project, and the recovery of what a dead one left behind.
  *
- * `instance.json` (`{ instance, pid, heartbeatAt }` under `.autoclaude/state/`, the format
- * `recordedInstance` reads) is the lock: it names the process that owns the project and says
- * when it last proved it was alive. A second orchestrator refuses while the first is alive;
- * it takes the file over when the pid is gone or the heartbeat is older than two minutes (a
- * laptop that slept, a process that hangs). The write is a temp file and a rename, so a reader
- * never sees half a file.
+ * `instance.json` (`{ instance, pid, startedAt, heartbeatAt }` under `.autoclaude/state/`, the
+ * format `recordedInstance` reads) is the lock: it names the process that owns the project, by
+ * pid and process start time, and says when it last proved it was alive. A second orchestrator
+ * refuses for as long as that process is alive, however old its heartbeat (R68): a synchronous
+ * git call or a bootstrap can stall the heartbeat of a process that is still working, and two
+ * live instances fight over the ledger. It takes the file over once the process is gone, or the
+ * pid now belongs to another process. The write is a temp file and a rename, so a reader never
+ * sees half a file.
  */
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -23,14 +25,17 @@ export const POSIX_START_TOLERANCE_MS = 2_000;
 export interface InstanceFile {
   instance: string;
   pid: number;
+  /** The process start time `processStartTime` reported; null in a file written before it was kept. */
+  startedAt: string | null;
   heartbeatAt: string;
 }
 
 export interface InstanceDeps {
   now: () => Date;
   pid: number;
-  /** Is a process with this pid alive? */
-  alive: (pid: number) => boolean;
+  /** The start time of the process with this pid, or null when there is none. */
+  startTime: (pid: number) => string | null;
+  platform: NodeJS.Platform;
   heartbeatMs: number;
   newId: () => string;
   /** Called once when the heartbeat finds another instance in the file. */
@@ -40,7 +45,8 @@ export interface InstanceDeps {
 const defaults = (): InstanceDeps => ({
   now: () => new Date(),
   pid: process.pid,
-  alive: (pid) => processStartTime(pid) !== null,
+  startTime: processStartTime,
+  platform: process.platform,
   heartbeatMs: HEARTBEAT_MS,
   newId: () => randomUUID(),
   onLost: () => {},
@@ -53,7 +59,12 @@ export function readInstance(root: string): InstanceFile | null {
     const text = readFileSync(instancePath(root), "utf8").replace(/^﻿/, "");
     const v = JSON.parse(text) as Partial<InstanceFile>;
     if (typeof v.instance !== "string" || typeof v.pid !== "number") return null;
-    return { instance: v.instance, pid: v.pid, heartbeatAt: String(v.heartbeatAt ?? "") };
+    return {
+      instance: v.instance,
+      pid: v.pid,
+      startedAt: typeof v.startedAt === "string" ? v.startedAt : null,
+      heartbeatAt: String(v.heartbeatAt ?? ""),
+    };
   } catch {
     return null;
   }
@@ -92,9 +103,22 @@ function writeInstance(root: string, file: InstanceFile, pid: number): void {
 }
 
 /**
- * Take the project's instance. Throws "already running" while another live process holds it
- * with a heartbeat younger than 120 s. `release()` stops the heartbeat and removes the file if
- * it is still ours.
+ * Is the process `held` names still the one that wrote it? By pid and start time, the identity
+ * orphan recovery uses (R19), never by the heartbeat alone. A file from before the start time was
+ * kept falls back to the old reading: a live pid with a fresh heartbeat.
+ */
+function holderAlive(held: InstanceFile, d: InstanceDeps): boolean {
+  const actual = d.startTime(held.pid);
+  if (held.startedAt !== null) return sameProcess(held.startedAt, actual, d.platform);
+  const beat = Date.parse(held.heartbeatAt);
+  const fresh = Number.isFinite(beat) && d.now().getTime() - beat <= STALE_HEARTBEAT_MS;
+  return fresh && actual !== null;
+}
+
+/**
+ * Take the project's instance. Throws "already running", naming the pid and how to stop it,
+ * while the process that holds it is alive (R68). `release()` stops the heartbeat and removes
+ * the file if it is still ours.
  */
 export function acquireInstance(
   root: string,
@@ -102,22 +126,24 @@ export function acquireInstance(
 ): { instance: string; release(): void } {
   const d = { ...defaults(), ...overrides };
   const instance = d.newId();
+  const startedAt = d.startTime(d.pid);
   const beatNow = () =>
-    writeInstance(root, { instance, pid: d.pid, heartbeatAt: d.now().toISOString() }, d.pid);
-  // Read-check-write under the ledger lock: of two processes that both saw a stale or absent
-  // file, the second one reads the first one's fresh heartbeat and refuses. The body is short
-  // (one liveness probe, one rename).
+    writeInstance(
+      root,
+      { instance, pid: d.pid, startedAt, heartbeatAt: d.now().toISOString() },
+      d.pid,
+    );
+  // Read-check-write under the ledger lock: of two processes that both saw a dead or absent
+  // holder, the second one reads the first one's file and refuses. The body is short (one
+  // liveness probe, one rename).
   mkdirSync(join(root, STATE_DIR), { recursive: true });
   withLedgerLock(root, () => {
     const held = readInstance(root);
-    if (held !== null) {
-      const beat = Date.parse(held.heartbeatAt);
-      const fresh = Number.isFinite(beat) && d.now().getTime() - beat <= STALE_HEARTBEAT_MS;
-      if (fresh && d.alive(held.pid)) {
-        throw new Error(
-          `autoclaude is already running for this project (pid ${held.pid}, instance ${held.instance}, heartbeat ${held.heartbeatAt})`,
-        );
-      }
+    if (held !== null && holderAlive(held, d)) {
+      const stop = d.platform === "win32" ? `taskkill /PID ${held.pid}` : `kill ${held.pid}`;
+      throw new Error(
+        `autoclaude is already running for this project as pid ${held.pid} (instance ${held.instance}, last heartbeat ${held.heartbeatAt}). Stop it first: \`autoclaude drain\` lets it finish its stages and exit, or end the process (Ctrl-C in its terminal, or \`${stop}\`)`,
+      );
     }
     beatNow();
   });

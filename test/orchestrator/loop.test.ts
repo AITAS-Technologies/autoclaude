@@ -201,30 +201,64 @@ describe("runLoop", () => {
     expect(dispatched, "nothing was dispatched after the signal").toBe(1);
   });
 
-  it("a foreign id in instance.json makes the loop stop taking work", async () => {
-    const ctx = ctxFor();
-    const first = new AbortController();
-    const h = acquireInstance(ctx.root, { heartbeatMs: 20, onLost: () => first.abort() });
-    const holds: boolean[] = [];
+  // R68: losing the instance is not a drain. The ledger is the other instance's now, and each
+  // further tick would turn its live stages into resume-needed.
+  it("a foreign id in instance.json stops the loop at once: its stages killed, no further tick", async () => {
+    const { rt, state } = heldRuntime();
+    const ctx = ctxFor(rt);
+    const lost = new AbortController();
+    const h = acquireInstance(ctx.root, { heartbeatMs: 20, onLost: () => lost.abort() });
+    let ticks = 0;
+    let ticksAfterLoss = 0;
     try {
-      const loop = runLoop(ctx, first.signal, {
-        tick: async (_c, o) => {
-          holds.push(o.noNewWork?.() ?? false);
-          return summary({ nextWakeMs: 30 });
+      const loop = runLoop(ctx, new AbortController().signal, {
+        lost: lost.signal,
+        tick: async (c, o) => {
+          ticks++;
+          if (lost.signal.aborted) ticksAfterLoss++;
+          if (ticks === 1)
+            c.stages.start(c, 7, "implement", new Date().toISOString(), async (tracked) => {
+              const proc = tracked.runtimes("claude").start(request, tracked.cfg);
+              return { kind: "no-report", result: await proc.done };
+            });
+          expect(o.halt?.(), "no tick is told to act after the loss").toBe(false);
+          return summary({ nextWakeMs: 60_000, running: c.stages.running() });
         },
       });
       await new Promise((r) => setTimeout(r, 60));
+      expect(state.started).toBe(1);
       writeFileSync(
         join(ctx.root, ".autoclaude", "state", "instance.json"),
         JSON.stringify({ instance: "someone-else", pid: 1, heartbeatAt: new Date().toISOString() }),
       );
-      await loop; // nothing runs: the drain ends at once
-      expect(first.signal.aborted).toBe(true);
-      expect(holds.at(-1), "the last tick ran in no-new-work mode").toBe(true);
-      expect(holds[0]).toBe(false);
+      await loop; // a stage was running: a drain would have waited for it
+      expect(lost.signal.aborted).toBe(true);
+      expect(state.killed, "the stage this process started was killed").toBe(1);
+      expect(ctx.stages.running()).toEqual([]);
+      expect(ticks).toBe(1);
+      expect(ticksAfterLoss).toBe(0);
     } finally {
       h.release();
     }
+  });
+
+  it("a tick in flight when the instance is lost acts on nothing more", async () => {
+    const ctx = ctxFor(heldRuntime().rt, {
+      situation: (c) => ({
+        ...emptySituation(c),
+        control: { paused: false, draining: false },
+        newWork: { allowed: true, reasons: [] } as unknown as Situation["newWork"],
+        queue: [{ number: 5, title: "Fix it" }],
+      }),
+    });
+    const calls: string[] = [];
+    ctx.exec = (cmd, args) => {
+      calls.push(`${cmd} ${args.join(" ")}`);
+      return { status: 1, stdout: "", stderr: "stub" };
+    };
+    ctx.forge = new Forge("acme/widgets", ctx.exec);
+    await tick(ctx, { halt: () => true });
+    expect(calls, "no claim, no label, no comment").toEqual([]);
   });
 
   describe("a real tick in no-new-work mode", () => {

@@ -7,7 +7,7 @@ import { runLoop } from "../orchestrator/loop.js";
 import { tick as realTick } from "../orchestrator/tick.js";
 import { messageOf, usageError } from "./common.js";
 import type { Io } from "./main.js";
-import { realContext, type RunDeps } from "./run.js";
+import { lostExit, realContext, type RunDeps } from "./run.js";
 
 const USAGE = "usage: autoclaude issue <n> [--replace]";
 
@@ -57,6 +57,7 @@ export async function issueVerb(
 
   const first = new AbortController();
   const second = new AbortController();
+  const lost = new AbortController();
   const onSignal = () => (first.signal.aborted ? second.abort() : first.abort());
   deps.signals.on("SIGINT", onSignal);
   deps.signals.on("SIGTERM", onSignal);
@@ -66,7 +67,8 @@ export async function issueVerb(
   try {
     const root = deps.root(cwd);
     try {
-      handle = acquireInstance(root, { onLost: () => first.abort() });
+      // Taken over all the same: stop at once, never drain into the other instance's ledger (R68).
+      handle = acquireInstance(root, { ...deps.instance, onLost: () => lost.abort() });
     } catch (e) {
       io.err(
         `${messageOf(e)}\nstop it first (autoclaude drain, then wait for autoclaude status to show nothing running), then run this again\n`,
@@ -76,6 +78,7 @@ export async function issueVerb(
     ctx = deps.context(root, handle.instance);
     const live = ctx;
     second.signal.addEventListener("abort", () => void live.stages.stopAll(), { once: true });
+    lost.signal.addEventListener("abort", () => void live.stages.stopAll(), { once: true });
 
     // An attended run is about this one issue: the situation the tick reads offers an empty
     // queue and a closed gate (Step 4 claims nothing), and only this issue's entry, cleanup
@@ -121,6 +124,7 @@ export async function issueVerb(
     const state = () => loadLedger(root).issues[String(n)]?.state ?? null;
     await runLoop(live, first.signal, {
       force: second.signal,
+      lost: lost.signal,
       log: (m) => io.err(`${m}\n`),
       tick: async (c, o) => {
         const summary = await deps.tick(c, o);
@@ -132,6 +136,7 @@ export async function issueVerb(
       },
     });
 
+    if (lost.signal.aborted) return lostExit(io);
     const entry = loadLedger(root).issues[String(n)];
     const final = entry?.state ?? null;
     io.out(

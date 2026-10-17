@@ -76,13 +76,15 @@ describe("acquireInstance", () => {
     acquireInstance(root).release();
   });
 
-  it("writes { instance, pid, heartbeatAt } where recordedInstance reads it, atomically", () => {
+  it("writes { instance, pid, startedAt, heartbeatAt } where recordedInstance reads it, atomically", () => {
     const root = project();
     const h = acquireInstance(root);
     try {
       const body = JSON.parse(readFileSync(stateFile(root), "utf8"));
-      expect(Object.keys(body).sort()).toEqual(["heartbeatAt", "instance", "pid"]);
+      expect(Object.keys(body).sort()).toEqual(["heartbeatAt", "instance", "pid", "startedAt"]);
       expect(body.pid).toBe(process.pid);
+      // The identity a later acquisition checks: this process's own start time (R68).
+      expect(body.startedAt).toBe(processStartTime(process.pid));
       expect(body.instance).toBe(h.instance);
       expect(recordedInstance(root)).toBe(h.instance);
       expect(
@@ -94,28 +96,84 @@ describe("acquireInstance", () => {
     expect(existsSync(stateFile(root))).toBe(false);
   });
 
+  /** Start times by pid: the holder's process as `processStartTime` would report it. */
+  const startTimes =
+    (times: Record<number, string>) =>
+    (pid: number): string | null =>
+      times[pid] ?? null;
+  const T1 = "2026-03-01T09:00:00.000Z";
+
   it("takes over a file whose pid is dead", () => {
     const root = project();
-    const old = acquireInstance(root, { pid: 4_000_001, alive: () => true, newId: () => "old" });
-    const h = acquireInstance(root, { alive: (pid) => pid !== 4_000_001, newId: () => "new" });
+    const old = acquireInstance(root, {
+      pid: 4_000_001,
+      startTime: startTimes({ 4_000_001: T1 }),
+      newId: () => "old",
+    });
+    const h = acquireInstance(root, { startTime: startTimes({}), newId: () => "new" });
     expect(recordedInstance(root)).toBe("new");
     old.release(); // must not remove the new owner's file
     expect(recordedInstance(root)).toBe("new");
     h.release();
   });
 
-  it("takes over a live pid's file only once its heartbeat is older than 120 s", () => {
+  // R68: a stale heartbeat alone no longer permits a takeover. A synchronous git call or a
+  // bootstrap stalls the heartbeat of a process that is still working, and two live instances
+  // fight over the ledger.
+  it("refuses a live instance however old its heartbeat, naming its pid and how to stop it", () => {
     const root = project();
     let t = Date.parse("2026-03-01T10:00:00Z");
     const now = () => new Date(t);
-    const a = acquireInstance(root, { now, pid: 4_000_002, alive: () => true, newId: () => "a" });
-    t += 119_000;
-    expect(() => acquireInstance(root, { now, alive: () => true })).toThrow(/already running/);
-    t += 2_000;
-    const b = acquireInstance(root, { now, alive: () => true, newId: () => "b" });
+    const startTime = startTimes({ 4_000_002: T1 });
+    const a = acquireInstance(root, { now, pid: 4_000_002, startTime, newId: () => "a" });
+    t += 3_600_000;
+    for (const platform of ["linux", "win32"] as const) {
+      let message = "";
+      try {
+        acquireInstance(root, { now, startTime, platform, newId: () => "b" });
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message, platform).toMatch(/already running for this project as pid 4000002/);
+      expect(message, platform).toContain("autoclaude drain");
+      expect(message, platform).toContain(
+        platform === "win32" ? "taskkill /PID 4000002" : "kill 4000002",
+      );
+    }
+    expect(recordedInstance(root)).toBe("a");
+    a.release();
+  });
+
+  it("takes over a reused pid: the same number with another start time is another process", () => {
+    const root = project();
+    const a = acquireInstance(root, {
+      pid: 4_000_003,
+      startTime: startTimes({ 4_000_003: T1 }),
+      newId: () => "a",
+    });
+    const b = acquireInstance(root, {
+      startTime: startTimes({ 4_000_003: "2026-03-01T11:00:00.000Z" }),
+      newId: () => "b",
+    });
     expect(recordedInstance(root)).toBe("b");
     a.release();
     b.release();
+  });
+
+  it("reads a file written before the start time was kept by its pid and heartbeat", () => {
+    const root = project();
+    mkdirSync(join(root, ".autoclaude", "state"), { recursive: true });
+    const t = Date.parse("2026-03-01T10:00:00Z");
+    writeFileSync(
+      stateFile(root),
+      JSON.stringify({ instance: "old", pid: 4_000_004, heartbeatAt: new Date(t).toISOString() }),
+    );
+    const startTime = startTimes({ 4_000_004: T1 });
+    const at = (ms: number) => () => new Date(t + ms);
+    expect(() => acquireInstance(root, { now: at(60_000), startTime })).toThrow(/already running/);
+    const h = acquireInstance(root, { now: at(121_000), startTime, newId: () => "new" });
+    expect(recordedInstance(root)).toBe("new");
+    h.release();
   });
 
   it("takes over a file it cannot read", () => {
