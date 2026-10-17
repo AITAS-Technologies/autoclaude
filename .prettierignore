@@ -1,0 +1,10 @@
+dist/
+coverage/
+node_modules/
+package-lock.json
+test/fixtures/
+spikes/
+docs/spikes/
+.superpowers/
+# vendored text, kept as its source wrote it (see NOTICE)
+prompts/procedures/

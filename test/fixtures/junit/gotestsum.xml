@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="3" failures="1" errors="0" time="0.014">
+	<testsuite tests="3" failures="1" time="0.006" name="example.org/lib/stack" timestamp="2026-01-05T10:00:00Z">
+		<properties>
+			<property name="go.version" value="go1.23"></property>
+		</properties>
+		<testcase classname="example.org/lib/stack" name="TestPush" time="0.000"></testcase>
+		<testcase classname="example.org/lib/stack" name="TestPop" time="0.000">
+			<failure message="Failed" type="">stack_test.go:21: got 3, want 2</failure>
+		</testcase>
+		<testcase classname="example.org/lib/stack" name="TestPeek" time="0.000"></testcase>
+	</testsuite>
+</testsuites>

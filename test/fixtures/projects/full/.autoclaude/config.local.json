@@ -1,0 +1,6 @@
+{
+  "humans": ["maintainer-b"],
+  "budget": { "claude": { "fiveHourPct": 50, "weeklyPct": 60 } },
+  "schedule": { "profiles": { "nightStopsTakingWorkAt": "04:30" } },
+  "stages": { "plan": { "model": "model-local", "effort": "max" } }
+}

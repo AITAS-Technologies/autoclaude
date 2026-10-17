@@ -1,0 +1,52 @@
+{
+  "autoclaude": ">=0.1.0",
+  "forge": { "remote": "origin" },
+  "branches": { "integration": "main", "production": "release" },
+  "humans": [],
+  "gates": [{ "name": "test", "check": "npm test" }],
+  "redStep": {
+    "testFiles": ["test/**/*.test.*", "tests/**/*.test.*"],
+    "run": "npm test -- {files}",
+    "result": "exit-code"
+  },
+  "stages": {
+    "triage": { "runtime": "claude", "model": "sonnet", "effort": "medium" },
+    "plan": { "runtime": "claude", "model": "opus", "effort": "high" },
+    "planReview": {
+      "runtime": "claude",
+      "model": "opus",
+      "effort": "medium",
+      "scorer": { "runtime": "claude", "model": "sonnet", "effort": "low" }
+    },
+    "implement": { "runtime": "claude", "model": "sonnet", "effort": "medium" },
+    "codeReview": {
+      "angles": { "default": { "runtime": "claude", "model": "sonnet", "effort": "medium" } },
+      "scorer": { "runtime": "claude", "model": "sonnet", "effort": "low" }
+    }
+  },
+  "codeReview": { "angles": ["criteria", "bugs", "tests", "security"], "scoreThreshold": 7 },
+  "queue": { "ready": "agent-ready" },
+  "labels": {
+    "working": "agent-working",
+    "blocked": "agent-blocked",
+    "needsShaping": "needs-shaping",
+    "fixRound": "agent-fix-",
+    "reviewRetry": "agent-retry-"
+  },
+  "requiredChecks": ["test"],
+  "forbiddenPaths": [".github/workflows/**", ".autoclaude/**"],
+  "caps": {
+    "concurrency": { "day": 1, "night": 2 },
+    "fixRounds": 2,
+    "reviewRetries": 2,
+    "planRounds": 2,
+    "issuesPerNight": 5,
+    "wallClockMinutesPerStage": 60,
+    "openPullRequests": 4,
+    "staleClaimHours": 2
+  },
+  "schedule": {
+    "timezone": "UTC",
+    "profiles": { "day": { "from": "08:00", "to": "20:00" }, "nightStopsTakingWorkAt": "05:00" }
+  }
+}

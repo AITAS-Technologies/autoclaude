@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+<testsuite name="test/add.test.js" time="0.0221" disabled="0" errors="0" tests="2" failures="1" skipped="0" hostname="host">
+	<testsuite name="add" time="0.0021" disabled="0" errors="0" tests="2" failures="1" skipped="0" hostname="host">
+		<testcase name="adds positives" time="0.0008" classname="test"/>
+		<testcase name="adds negatives" time="0.0011" classname="test">
+			<failure type="testCodeFailure" message="Expected values to be strictly equal:&#10;&#10;-1 !== -5&#10;">
+[Error [ERR_ASSERTION]: Expected values to be strictly equal:
+
+-1 !== -5
+] {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION'
+}
+			</failure>
+		</testcase>
+	</testsuite>
+</testsuite>
+</testsuites>

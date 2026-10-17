@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="3" failures="1" errors="0" time="0.012">
+    <testsuite name="test/math.test.ts" timestamp="2026-01-05T10:00:00.000Z" hostname="host" tests="3" failures="1" errors="0" skipped="0" time="0.004">
+        <testcase classname="test/math.test.ts" name="adds" time="0.001">
+        </testcase>
+        <testcase classname="test/math.test.ts" name="subtracts" time="0.001">
+        </testcase>
+        <testcase classname="test/math.test.ts" name="multiplies" time="0.002">
+            <failure message="expected 6 to be 7" type="AssertionError">
+AssertionError: expected 6 to be 7
+ - Expected: 7
+ + Received: 6
+            </failure>
+        </testcase>
+    </testsuite>
+</testsuites>

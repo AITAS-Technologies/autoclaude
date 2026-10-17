@@ -1,0 +1,48 @@
+{
+  "autoclaude": ">=0.1.0",
+  "branches": { "integration": "develop", "production": "main" },
+  "gates": [{ "name": "test", "check": "npm test" }],
+  "redStep": {
+    "testFiles": ["tests/**/*.test.ts"],
+    "run": "npx vitest run {files}",
+    "result": "exit-code"
+  },
+  "stages": {
+    "triage": { "runtime": "claude", "model": "model-small" },
+    "plan": { "runtime": "claude", "model": "model-large", "effort": "high" },
+    "planReview": {
+      "runtime": "claude",
+      "model": "model-large",
+      "scorer": { "runtime": "claude", "model": "model-small" }
+    },
+    "implement": { "runtime": "claude", "model": "model-small" },
+    "codeReview": {
+      "angles": { "default": { "runtime": "claude", "model": "model-small" } },
+      "scorer": { "runtime": "claude", "model": "model-small" }
+    }
+  },
+  "queue": { "ready": "agent-ready" },
+  "labels": {
+    "working": "agent-working",
+    "blocked": "agent-blocked",
+    "needsShaping": "needs-shaping",
+    "fixRound": "agent-fix-",
+    "reviewRetry": "agent-retry-"
+  },
+  "requiredChecks": ["test"],
+  "forbiddenPaths": [".github/workflows/**"],
+  "caps": {
+    "concurrency": { "day": 1, "night": 2 },
+    "fixRounds": 2,
+    "reviewRetries": 2,
+    "planRounds": 2,
+    "issuesPerNight": 5,
+    "wallClockMinutesPerStage": 60,
+    "openPullRequests": 4,
+    "staleClaimHours": 2
+  },
+  "schedule": {
+    "timezone": "UTC",
+    "profiles": { "day": { "from": "08:00", "to": "20:00" }, "nightStopsTakingWorkAt": "05:00" }
+  }
+}
