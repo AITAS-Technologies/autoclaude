@@ -131,6 +131,14 @@ export interface PrSummary {
   url: string;
 }
 
+export interface PrThread {
+  number: number;
+  title: string;
+  files: Array<{ path: string }>;
+  comments: Array<{ author: { login: string } | null; body: string }>;
+  reviews: Array<{ author: { login: string } | null; body: string }>;
+}
+
 function complete<T>(items: T[], what: string): T[] {
   if (items.length >= LIST_LIMIT) {
     throw new Error(
@@ -236,6 +244,20 @@ export class Forge {
 
   viewPr(n: number): PrView {
     return this.json<PrView>(["pr", "view", String(n), "--json", PR_FIELDS]);
+  }
+
+  /**
+   * A pull request's title, changed files and discussion (conversation comments and review
+   * bodies; inline review comments need the REST API and are not included).
+   */
+  viewPrThread(n: number): PrThread {
+    return this.json<PrThread>([
+      "pr",
+      "view",
+      String(n),
+      "--json",
+      "number,title,files,comments,reviews",
+    ]);
   }
 
   listPrs(state: "open" | "all"): PrSummary[] {

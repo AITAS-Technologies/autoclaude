@@ -122,7 +122,11 @@ export const claudeAdapter: RuntimeAdapter = {
   start(req: StageRequest, cfg: ProjectConfig) {
     writeFileSync(
       join(req.runDir, SETTINGS_FILE),
-      JSON.stringify(claudeSettings(cfg, req.cwd, autoclaudeBinCommand())),
+      JSON.stringify(
+        claudeSettings(cfg, req.cwd, autoclaudeBinCommand(), process.platform, {
+          readOnly: req.readOnly,
+        }),
+      ),
     );
     const env = stageEnv(process.env, { scratchDir: req.runDir });
     const stdoutFile = join(req.runDir, STDOUT_FILE);

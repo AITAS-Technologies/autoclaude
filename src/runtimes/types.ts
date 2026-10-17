@@ -12,6 +12,8 @@ export interface StageRequest {
   timeoutMs: number;
   maxTurns: number;
   projectRoot: string;
+  /** A stage that must not change files (triage): the runtime fences Edit/Write and mutating git off. */
+  readOnly?: boolean;
 }
 
 export interface StageResult {

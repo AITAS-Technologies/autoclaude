@@ -79,18 +79,12 @@ export function hookCommand(
 /** `Bash(<prefix>)` and `Bash(<prefix> *)`: the bare command and the command with arguments. */
 const bash = (prefix: string): string[] => [`Bash(${prefix})`, `Bash(${prefix} *)`];
 
-const LOCAL_GIT = [
+const READ_GIT = [
   "git status",
   "git diff",
   "git log",
   "git show",
   "git blame",
-  "git add",
-  "git commit",
-  "git rebase",
-  "git checkout",
-  "git switch",
-  "git restore",
   "git rev-parse",
   "git ls-files",
   "git merge-base",
@@ -98,6 +92,16 @@ const LOCAL_GIT = [
   "git branch --show-current",
   "git stash list",
 ];
+/** Git verbs that change the work tree or history; a read-only stage gets none of them. */
+const WRITE_GIT = [
+  "git add",
+  "git commit",
+  "git rebase",
+  "git checkout",
+  "git switch",
+  "git restore",
+];
+const LOCAL_GIT = [...READ_GIT, ...WRITE_GIT];
 const ENGINE_VERBS = ["autoclaude note", "autoclaude gates"];
 // Not `cd`, `find`, `sort` or `uniq` (R42): `find -exec|-delete|-fprint`, `sort -o` and
 // `uniq in out` execute or write, and the source product denied all four.
@@ -150,13 +154,18 @@ const underWorktree = (rule: string, glob: string): string =>
  * The `--settings` object for one Claude stage run in `worktree`.
  *
  * @param autoclaudeBin ready-to-use quoted command prefix, see `autoclaudeBinCommand`
+ * @param opts.readOnly a stage that only reads (triage): no `Edit`/`Write` allow rule, those
+ *   tools denied outright, and none of the git verbs that change the tree, nor the engine
+ *   verbs (`autoclaude gates` may run a project's fix command)
  */
 export function claudeSettings(
   cfg: ProjectConfig,
   worktree: string,
   autoclaudeBin: string,
   platform: NodeJS.Platform = process.platform,
+  opts: { readOnly?: boolean } = {},
 ): object {
+  const readOnly = opts.readOnly === true;
   if (RULE_SYNTAX.test(forShell(worktree, platform)))
     throw new Error(
       `the worktree path contains a character that is permission-rule syntax (* ? [ ] { } ( )), so the stage's write fence cannot be stated safely: ${worktree}`,
@@ -166,9 +175,11 @@ export function claudeSettings(
     "Read",
     "Grep",
     "Glob",
-    `Edit(${root}/**)`,
-    `Write(${root}/**)`,
-    ...[...LOCAL_GIT, ...ENGINE_VERBS, ...SHELL_VERBS].flatMap(bash),
+    ...(readOnly ? [] : [`Edit(${root}/**)`, `Write(${root}/**)`]),
+    ...(readOnly
+      ? [...READ_GIT, ...SHELL_VERBS]
+      : [...LOCAL_GIT, ...ENGINE_VERBS, ...SHELL_VERBS]
+    ).flatMap(bash),
     // A prefix followed by a space and a star: `npx tool sub new *` cannot match `... newx`.
     ...cfg.fence.allow.map((p) => `Bash(${p} *)`),
   ];
@@ -178,6 +189,7 @@ export function claudeSettings(
     "WebSearch",
     "NotebookEdit",
     "Agent",
+    ...(readOnly ? ["Edit", "Write"] : []),
     ...DENIED_COMMANDS.flatMap(bash),
     ...SECRET_FILES.flatMap((f) => [`Edit(${f})`, `Write(${f})`, `Read(${f})`]),
     ...HOME_SECRETS.flatMap((f) => [`Edit(${f})`, `Write(${f})`, `Read(${f})`]),

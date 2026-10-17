@@ -76,6 +76,19 @@ describe("claudeSettings", () => {
     expect(s.permissions.allow).not.toContain("Write");
   });
 
+  it("readOnly: no Edit or Write allow rule, both denied, no tree-changing git or engine verb", () => {
+    const s = claudeSettings(config(), wt, BIN, "linux", { readOnly: true }) as Settings;
+    const { allow, deny } = s.permissions;
+    expect(allow.filter((a) => /^(Edit|Write)\b/.test(a))).toEqual([]);
+    expect(deny).toEqual(expect.arrayContaining(["Edit", "Write"]));
+    for (const verb of ["git commit", "git add", "git checkout", "git rebase", "autoclaude gates"])
+      expect(allow.some((a) => a.startsWith(`Bash(${verb}`))).toBe(false);
+    expect(allow).toEqual(expect.arrayContaining(["Read", "Grep", "Glob", "Bash(git status)"]));
+    expect(s.hooks.PreToolUse[0]!.matcher).toBe("Bash");
+    // The default is unchanged.
+    expect(settings(wt).permissions.allow).toContain("Bash(git commit)");
+  });
+
   it("uses the Phase 0 spelling for a Windows worktree", () => {
     const s = claudeSettings(
       config(),
