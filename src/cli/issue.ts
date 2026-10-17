@@ -71,7 +71,7 @@ export async function issueVerb(
       handle = acquireInstance(root, { ...deps.instance, onLost: () => lost.abort() });
     } catch (e) {
       io.err(
-        `${messageOf(e)}\nstop it first (autoclaude drain, then wait for autoclaude status to show nothing running), then run this again\n`,
+        `${messageOf(e)}; once autoclaude status shows nothing running, run this again\n`,
       );
       return 1;
     }

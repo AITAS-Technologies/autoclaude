@@ -161,7 +161,7 @@ export function acquireInstance(
       }
       beatNow();
     } catch {
-      /* a failed beat is retried at the next one; the file ages out only after 120 s */
+      /* a failed beat is retried at the next one; readers call a beat older than 120 s stale */
     }
   }, d.heartbeatMs);
   timer.unref();
