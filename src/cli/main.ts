@@ -6,6 +6,7 @@ import { VERSION } from "../version.js";
 import { gatesVerb } from "./gates.js";
 import { guardVerb } from "./guard.js";
 import { runVerb } from "./run.js";
+import { serviceVerb } from "./service.js";
 
 export interface Io {
   out(s: string): void;
@@ -19,6 +20,7 @@ export const VERBS: Record<string, Verb> = {
   gates: (args, io) => gatesVerb(args, io, process.cwd()),
   guard: (args, io) => guardVerb(args, io),
   run: (args, io) => runVerb(args, io, process.cwd()),
+  service: (args, io) => serviceVerb(args, io, process.cwd()),
 };
 
 const USAGE =
