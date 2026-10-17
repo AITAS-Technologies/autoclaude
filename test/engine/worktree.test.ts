@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import {
   createWorktree,
   ensureEngineExcludes,
@@ -28,6 +29,7 @@ import { notIssueBranch } from "../../src/engine/branch-names.js";
 import type { ProjectConfig } from "../../src/config/types.js";
 import { git, realExec, type Exec } from "../../src/forge/github.js";
 import { samePath, toPosix } from "../../src/platform/paths.js";
+import { run } from "../../src/platform/spawn.js";
 import { childEnv } from "../helpers/child-env.js";
 
 const cfg = {
@@ -232,6 +234,43 @@ describe("create and remove, against a real temporary repository", () => {
   }, 60_000);
 
   // A copy that fails is a failed creation, undone like a failed `worktree add`.
+  // An entry that holds the worktree (`.autoclaude`, with the default root under it) would have
+  // the walk descend into the copy it is making, synchronously and without end; `cpSync`
+  // refused it. Run in a child under a hard limit: a synchronous loop in this worker would keep
+  // vitest's own timeout from firing, so a regression fails here instead of hanging the run.
+  it("refuses a copy entry that contains the worktrees root, at once, and leaves nothing behind", async () => {
+    const { root } = repo("autoclaude-wt-self-");
+    const local = withRoot(".autoclaude/worktrees", [".autoclaude"]);
+    const source = pathToFileURL(resolve("src/engine/worktree.ts")).href;
+    const script = `
+      const { createWorktree } = await import(${JSON.stringify(source)});
+      try {
+        createWorktree(16, "Self copy", { replace: false, root: ${JSON.stringify(root)} }, ${JSON.stringify(local)});
+        console.log("COPIED");
+      } catch (e) {
+        console.log("REFUSED " + e.message);
+      }`;
+    const r = await run(
+      process.execPath,
+      [
+        "--experimental-transform-types",
+        "--import",
+        pathToFileURL(resolve("test/helpers/ts-register.mjs")).href,
+        "--disable-warning=ExperimentalWarning",
+        "--input-type=module",
+        "-e",
+        script,
+      ],
+      { env: childEnv(), timeoutMs: 20_000 },
+    );
+    expect(r.timedOut, "the walk did not end").toBe(false);
+    expect(r.stdout, r.stderr).toMatch(
+      /^REFUSED worktrees\.copy: \.autoclaude contains the worktrees root, .*nothing was copied/,
+    );
+    expect(existsSync(wtDir(root, "agent+16-self-copy"))).toBe(false);
+    expect(sh(root, "branch", "--list", "agent/16-self-copy")).toBe("");
+  }, 40_000);
+
   it("fails the creation when a copy fails, and leaves no worktree or branch behind", () => {
     const { root } = repo("autoclaude-wt-copyfail-");
     // The integration branch has a file `conf`; the main checkout has a directory there now,

@@ -18,6 +18,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -505,8 +506,9 @@ export interface NotCopied {
  * destination does. A symbolic link is never followed: a link to a file outside the project
  * would carry that file in. It is skipped and reported, like an entry that is not there.
  *
- * @throws when a copy fails, or an entry is not at the destination afterwards: a worktree
- *   without its configured files is not one a stage may run in
+ * @throws when an entry holds the worktree (or lies inside it), when a copy fails, or when an
+ *   entry is not at the destination afterwards: a worktree without its configured files is not
+ *   one a stage may run in
  */
 export function copyIntoWorktree(
   root: string,
@@ -515,6 +517,13 @@ export function copyIntoWorktree(
 ): { copied: string[]; missing: NotCopied[] } {
   const copied: string[] = [];
   const missing: NotCopied[] = [];
+  // Before anything is copied: an entry that holds the worktree (`.autoclaude`, with the default
+  // `worktrees.root` under it) would have the walk descend into the very copy it is making,
+  // synchronously and without end. `cpSync` refused that case; the walk has to refuse it too.
+  for (const entry of cfg.worktrees.copy) {
+    const why = overlapsWorktree(resolve(root, entry), worktree);
+    if (why !== null) throw new Error(`worktrees.copy: ${entry} ${why}; nothing was copied`);
+  }
   for (const entry of cfg.worktrees.copy) {
     const from = resolve(root, entry);
     const rel = relative(root, from);
@@ -544,6 +553,33 @@ export function copyIntoWorktree(
     copied.push(entry);
   }
   return { copied, missing };
+}
+
+/**
+ * Why copying `from` into `worktree` would copy the worktree into itself, or null. Compared as
+ * real paths, folded for case on Windows and macOS, so neither a short 8.3 name nor another
+ * spelling of the same directory hides the overlap. A source that is not there cannot overlap.
+ */
+function overlapsWorktree(from: string, worktree: string): string | null {
+  const real = (p: string): string | null => {
+    try {
+      const r = realpathSync.native(p);
+      return process.platform === "win32" || process.platform === "darwin" ? r.toLowerCase() : r;
+    } catch {
+      return null;
+    }
+  };
+  const source = real(from);
+  const dest = real(worktree);
+  if (source === null || dest === null) return null;
+  const within = (outer: string, inner: string): boolean => {
+    const rel = relative(outer, inner);
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  };
+  if (within(source, dest))
+    return `contains the worktrees root, and with it the worktree ${worktree} it would be copied into`;
+  if (within(dest, source)) return `lies inside the worktree ${worktree} it would be copied into`;
+  return null;
 }
 
 function isLink(path: string): boolean {
