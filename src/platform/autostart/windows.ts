@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSync, type RunResult } from "../spawn.js";
 
@@ -92,10 +92,16 @@ export function install(o: ServiceOpts): RunResult {
   return runSync("schtasks", ["/Create", "/XML", file, "/TN", o.name, "/F"]);
 }
 
-export function uninstall(name: string): RunResult {
-  return runSync("schtasks", ["/Delete", "/TN", name, "/F"]);
+export function uninstall(name: string, projectRoot: string): RunResult {
+  const r = runSync("schtasks", ["/Delete", "/TN", name, "/F"]);
+  rmSync(join(projectRoot, ".autoclaude", "state", "service.xml"), { force: true });
+  if (r.status === 0) return r;
+  // A task that does not exist is already uninstalled. The message is localised, so ask
+  // instead of matching it: a failing query means there is no such task.
+  return runSync("schtasks", ["/Query", "/TN", name]).status === 0 ? r : { ...r, status: 0 };
 }
 
+/** `/V /FO LIST` adds the last run time and last result to the plain query. */
 export function status(name: string): RunResult {
-  return runSync("schtasks", ["/Query", "/TN", name]);
+  return runSync("schtasks", ["/Query", "/TN", name, "/V", "/FO", "LIST"]);
 }

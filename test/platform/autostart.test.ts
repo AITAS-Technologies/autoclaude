@@ -7,10 +7,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { VERBS, type Io } from "../../src/cli/main.js";
+import { main, VERBS, type Io } from "../../src/cli/main.js";
 import { serviceName, serviceVerb, type ServiceDeps } from "../../src/cli/service.js";
 import { systemdUnit } from "../../src/platform/autostart/linux.js";
 import { launchdPlist } from "../../src/platform/autostart/macos.js";
@@ -207,8 +207,10 @@ function writeFakes(): void {
       'import { appendFileSync } from "node:fs";',
       "const [tool, ...argv] = process.argv.slice(2);",
       'appendFileSync(process.env.AC_FAKE_LOG, JSON.stringify({ tool, argv }) + "\\n");',
-      "if (process.env.AC_FAKE_FAIL === tool) {",
-      "  process.stderr.write(`${tool} exploded\\n`);",
+      "const failOn = (process.env.AC_FAKE_FAIL_ON ?? '').split(',');",
+      "const hit = argv.some((a) => failOn.includes(`${tool}:${a}`));",
+      "if (process.env.AC_FAKE_FAIL === tool || hit) {",
+      "  process.stderr.write(`${process.env.AC_FAKE_MSG ?? `${tool} exploded`}\\n`);",
       "  process.exit(5);",
       "}",
       "process.stdout.write(`${tool} ok\\n`);",
@@ -244,11 +246,15 @@ beforeEach(() => {
   process.env.PATH = `${fakeDir}${process.platform === "win32" ? ";" : ":"}${savedPath}`;
   process.env.AC_FAKE_LOG = callLog;
   delete process.env.AC_FAKE_FAIL;
+  delete process.env.AC_FAKE_FAIL_ON;
+  delete process.env.AC_FAKE_MSG;
 });
 afterEach(() => {
   process.env.PATH = savedPath;
   delete process.env.AC_FAKE_LOG;
   delete process.env.AC_FAKE_FAIL;
+  delete process.env.AC_FAKE_FAIL_ON;
+  delete process.env.AC_FAKE_MSG;
 });
 
 function project(): string {
@@ -310,7 +316,7 @@ describe("service verb on Windows", () => {
     expect(s.out.join("")).toContain("schtasks ok");
     expect(calls()).toEqual([
       { tool: "schtasks", argv: ["/Delete", "/TN", name, "/F"] },
-      { tool: "schtasks", argv: ["/Query", "/TN", name] },
+      { tool: "schtasks", argv: ["/Query", "/TN", name, "/V", "/FO", "LIST"] },
     ]);
   });
 
@@ -320,6 +326,41 @@ describe("service verb on Windows", () => {
     const { io, err } = capture();
     expect(await serviceVerb(["install"], io, root, deps(root, "win32", mk("ac-home-")))).toBe(1);
     expect(err.join("")).toContain("schtasks exploded");
+  });
+});
+
+describe("service verb on Windows: uninstall of a task that is gone", () => {
+  it("succeeds, and removes the stale task file", async () => {
+    const root = project();
+    const home = mk("ac-home-");
+    await serviceVerb(["install"], capture().io, root, deps(root, "win32", home));
+    const xml = join(root, ".autoclaude", "state", "service.xml");
+    expect(existsSync(xml)).toBe(true);
+    process.env.AC_FAKE_FAIL_ON = "schtasks:/Delete,schtasks:/Query";
+    process.env.AC_FAKE_MSG = "ERROR: The system cannot find the file specified.";
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "win32", home))).toBe(0);
+    expect(err.join("")).toBe("");
+    expect(existsSync(xml)).toBe(false);
+  });
+
+  it("still fails when the delete fails and the task is there", async () => {
+    const root = project();
+    process.env.AC_FAKE_FAIL_ON = "schtasks:/Delete";
+    process.env.AC_FAKE_MSG = "ERROR: Access is denied.";
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "win32", mk("ac-home-")))).toBe(1);
+    expect(err.join("")).toContain("Access is denied");
+  });
+
+  it("names the OS user in the task when USERNAME and USERDOMAIN are unset", async () => {
+    const root = project();
+    const d = deps(root, "win32", mk("ac-home-"));
+    d.env = { PATH: "/usr/bin" };
+    expect(await serviceVerb(["install"], capture().io, root, d)).toBe(0);
+    const bytes = readFileSync(join(root, ".autoclaude", "state", "service.xml"));
+    const text = bytes.subarray(2).toString("utf16le");
+    expect(text).toContain(`<UserId>${userInfo().username}</UserId>`);
   });
 });
 
@@ -362,6 +403,60 @@ describe("service verb on macOS", () => {
     const { io, err } = capture();
     expect(await serviceVerb(["install"], io, root, deps(root, "darwin", mk("ac-home-")))).toBe(1);
     expect(err.join("")).toContain("launchctl exploded");
+  });
+});
+
+describe("service verb: uninstall of a service that is not loaded", () => {
+  it("macOS removes the plist and succeeds when bootout and print fail", async () => {
+    const root = project();
+    const home = mk("ac-home-");
+    const name = serviceName(root);
+    await serviceVerb(["install"], capture().io, root, deps(root, "darwin", home));
+    process.env.AC_FAKE_FAIL_ON = "launchctl:bootout,launchctl:print";
+    process.env.AC_FAKE_MSG = "Boot-out failed: 5: Input/output error";
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "darwin", home))).toBe(0);
+    expect(err.join("")).toBe("");
+    expect(existsSync(join(home, "Library", "LaunchAgents", `${name}.plist`))).toBe(false);
+  });
+
+  it("macOS removes the plist but still fails when bootout fails on a loaded agent", async () => {
+    const root = project();
+    const home = mk("ac-home-");
+    const name = serviceName(root);
+    await serviceVerb(["install"], capture().io, root, deps(root, "darwin", home));
+    process.env.AC_FAKE_FAIL_ON = "launchctl:bootout";
+    process.env.AC_FAKE_MSG = "Operation not permitted";
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "darwin", home))).toBe(1);
+    expect(err.join("")).toContain("Operation not permitted");
+    expect(existsSync(join(home, "Library", "LaunchAgents", `${name}.plist`))).toBe(false);
+  });
+
+  it("Linux removes the unit and succeeds when the unit is not loaded", async () => {
+    const root = project();
+    const home = mk("ac-home-");
+    const name = serviceName(root);
+    await serviceVerb(["install"], capture().io, root, deps(root, "linux", home));
+    process.env.AC_FAKE_FAIL_ON = "systemctl:disable";
+    process.env.AC_FAKE_MSG = `Failed to disable unit: Unit file ${name}.service does not exist.`;
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "linux", home))).toBe(0);
+    expect(err.join("")).toBe("");
+    expect(existsSync(join(home, ".config", "systemd", "user", `${name}.service`))).toBe(false);
+  });
+
+  it("Linux removes the unit but fails when there is no user bus", async () => {
+    const root = project();
+    const home = mk("ac-home-");
+    const name = serviceName(root);
+    await serviceVerb(["install"], capture().io, root, deps(root, "linux", home));
+    process.env.AC_FAKE_FAIL_ON = "systemctl:disable";
+    process.env.AC_FAKE_MSG = "Failed to connect to bus: No medium found";
+    const { io, err } = capture();
+    expect(await serviceVerb(["uninstall"], io, root, deps(root, "linux", home))).toBe(1);
+    expect(err.join("")).toContain("Failed to connect to bus");
+    expect(existsSync(join(home, ".config", "systemd", "user", `${name}.service`))).toBe(false);
   });
 });
 
@@ -410,7 +505,10 @@ describe("service verb on Linux", () => {
 });
 
 describe("service verb arguments and guards", () => {
-  it("is registered as a verb", () => {
+  it("is registered as a verb and listed in the usage text", async () => {
+    const { io, out } = capture();
+    await main(["--help"], io);
+    expect(out.join("")).toContain("service");
     expect(typeof VERBS.service).toBe("function");
   });
 

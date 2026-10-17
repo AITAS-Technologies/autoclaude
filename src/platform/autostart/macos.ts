@@ -73,8 +73,14 @@ export function install(o: ServiceOpts, home: string, uid: number): RunResult {
 
 export function uninstall(name: string, home: string, uid: number): RunResult {
   const r = runSync("launchctl", ["bootout", `gui/${uid}/${name}`]);
-  if (r.status === 0) rmSync(plistPath(home, name), { force: true });
-  return r;
+  // The definition goes whatever bootout said: left behind, launchd would load it at the next login.
+  rmSync(plistPath(home, name), { force: true });
+  if (r.status === 0) return r;
+  // An agent that is not loaded fails bootout. Ask rather than match the message: a failing
+  // print means it is not loaded, so it is already uninstalled.
+  return runSync("launchctl", ["print", `gui/${uid}/${name}`]).status === 0
+    ? r
+    : { ...r, status: 0 };
 }
 
 export function status(name: string, uid: number): RunResult {

@@ -24,7 +24,7 @@ export const VERBS: Record<string, Verb> = {
 };
 
 const USAGE =
-  "usage: autoclaude <verb> [options]\n\nverbs:\n  gates      run the project quality gates\n  guard      the PreToolUse hook of a stage (pending call on stdin)\n  run        the orchestrator: tick until drained or stopped [--once]\n\n  --version  print the version\n  --help     print this text\n";
+  "usage: autoclaude <verb> [options]\n\nverbs:\n  gates      run the project quality gates\n  guard      the PreToolUse hook of a stage (pending call on stdin)\n  run        the orchestrator: tick until drained or stopped [--once]\n  service    autostart at logon: install, uninstall or status\n\n  --version  print the version\n  --help     print this text\n";
 
 const defaultIo: Io = {
   out: (s) => void process.stdout.write(s),

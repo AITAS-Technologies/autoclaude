@@ -64,9 +64,12 @@ export function install(o: ServiceOpts, home: string): RunResult {
 
 export function uninstall(name: string, home: string): RunResult {
   const r = ctl("disable", "--now", `${name}.service`);
-  if (r.status !== 0) return r;
+  // The unit goes whatever disable said, so a retry never meets a half-removed service.
   rmSync(unitPath(home, name), { force: true });
-  return ctl("daemon-reload");
+  const reload = ctl("daemon-reload");
+  const missing = /not loaded|not found|does not exist|no such file|could not be found/i;
+  if (r.status !== 0 && !missing.test(`${r.stderr}\n${r.stdout}`)) return r;
+  return reload;
 }
 
 export function status(name: string): RunResult {

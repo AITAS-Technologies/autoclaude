@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { fileURLToPath } from "node:url";
 import { loadProjectConfig } from "../config/load.js";
 import { repoRoot } from "../engine/root.js";
@@ -51,6 +51,16 @@ function realDeps(): ServiceDeps {
   };
 }
 
+/**
+ * The account the Windows task belongs to. Without a UserId the logon trigger fires for every
+ * user and registering it needs elevation, so the OS's idea of the user stands in for a missing
+ * USERNAME, with the domain when known.
+ */
+function logonUser(env: NodeJS.ProcessEnv): string {
+  const name = env.USERNAME || userInfo().username;
+  return env.USERDOMAIN ? `${env.USERDOMAIN}\\${name}` : name;
+}
+
 function report(r: RunResult, io: Io): number {
   if (r.status === 0) {
     if (r.stdout !== "") io.out(r.stdout.endsWith("\n") ? r.stdout : `${r.stdout}\n`);
@@ -67,8 +77,8 @@ function installOf(d: ServiceDeps, o: ServiceOpts): RunResult {
   return linux.install(o, d.home);
 }
 
-function uninstallOf(d: ServiceDeps, name: string): RunResult {
-  if (d.platform === "win32") return windows.uninstall(name);
+function uninstallOf(d: ServiceDeps, name: string, root: string): RunResult {
+  if (d.platform === "win32") return windows.uninstall(name, root);
   if (d.platform === "darwin") return macos.uninstall(name, d.home, d.uid);
   return linux.uninstall(name, d.home);
 }
@@ -100,7 +110,7 @@ export async function serviceVerb(
     const root = d.root(cwd);
     const name = serviceName(root);
     if (sub === "status") return report(statusOf(d, name), io);
-    if (sub === "uninstall") return report(uninstallOf(d, name), io);
+    if (sub === "uninstall") return report(uninstallOf(d, name, root), io);
 
     // A service that would start `run` against a broken config only fails in a loop.
     loadProjectConfig(root);
@@ -110,8 +120,7 @@ export async function serviceVerb(
       main: d.main,
       projectRoot: root,
       env: { PATH: d.env.PATH, HOME: d.env.HOME },
-      user:
-        d.env.USERDOMAIN && d.env.USERNAME ? `${d.env.USERDOMAIN}\\${d.env.USERNAME}` : undefined,
+      user: logonUser(d.env),
     };
     const code = report(installOf(d, opts), io);
     if (code === 0) {
