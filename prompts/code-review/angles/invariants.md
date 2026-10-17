@@ -17,7 +17,7 @@ you carry the confidence.
 `## Schema changes` names is **not** a forbidden path and is not a finding on its own — the
 implementer is allowed to write one. Review it like any other change, against the rows of the
 invariants that speak about schema changes and about new tables, with those rows' own rule ids, and
-record that the diff carries a migration, `<path>` the migration file:
-`autoclaude note {{issue}} 'diff carries a migration <path>'`. Absent heading: the project has no migration procedure, so a file that looks like a
-migration is itself a finding rather than routine work. Whether it may be merged is a human's
-decision, not yours and not the engine's.
+say that the diff carries a migration with one line in `uncertain`, `<path>` the migration file:
+`schema — the diff carries a migration: <path>`. Absent heading: the project has no migration
+procedure, so a file that looks like a migration is itself a finding rather than routine work.
+Whether it may be merged is a human's decision, not yours and not the engine's.

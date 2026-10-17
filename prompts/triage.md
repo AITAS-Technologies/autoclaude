@@ -10,7 +10,7 @@ engine applies the labels and posts the comment from it.
 ## Inputs
 
 - The dispatch file `{{dispatchFile}}`, JSON. Its `issue` holds the issue: `number`, `title`,
-  `body`, `labels`, and the `comments` of its trusted authors. Its `projectFacts.projectMd` is the
+  `body`, `labels` and its `comments`. Its `projectFacts.projectMd` is the
   project's `.autoclaude/project.md`.
 - `.autoclaude/config.json` at the repository root, for the label names under `queue.ready` and
   `labels`.
@@ -26,8 +26,7 @@ and writes everything back.
 
 Decide `skipped` — no comment, nothing proposed — if the issue already carries a label autoclaude
 manages (the label named by `queue.ready`, or by `labels.working`, `labels.blocked` or
-`labels.needsShaping`, or a label starting with `labels.fixRound` or `labels.reviewRetry`), or if
-the dispatch file shows it closed or assigned: an assignee means a human has claimed it. `reason`
+`labels.needsShaping`, or a label starting with `labels.fixRound` or `labels.reviewRetry`). `reason`
 says which.
 
 ## Step 2: The form

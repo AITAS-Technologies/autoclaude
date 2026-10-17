@@ -7,8 +7,8 @@ last section of this prompt; the rules before it hold for every angle.
 
 ## Your reading: `security`
 
-For each entry point the diff adds or changes — a route, a handler, a server action, a webhook, a
-job, a script that takes arguments — ask who may call it and where that is checked: one that reads,
+For each entry point the diff adds or changes — a route, a handler, a form or RPC handler, a webhook,
+a job, a script that takes arguments — ask who may call it and where that is checked: one that reads,
 changes or deletes a resource for a caller it never checked is `security/authz-missing`.
 
 Then follow every value that arrives from outside — a request field, a header, a file name, an
@@ -26,5 +26,5 @@ what installing it runs and who publishes it, `security/dependency-risk`, quotin
 Where the project's own catalogue states a rule for its own architecture — which layer checks
 authorisation, which client bypasses the data layer's access rules, which variables reach the
 browser — leave it to the `invariants` reading, which walks every one of those rows: yours are the
-ways in that no project row names. As in the `bugs` reading, name the input that gets in; a way in
-you cannot name is `uncertain`.
+ways in that no project row names. Name the input that gets in; a way in you cannot name is
+`uncertain`.

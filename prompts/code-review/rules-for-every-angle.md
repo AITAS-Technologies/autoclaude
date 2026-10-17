@@ -14,9 +14,10 @@ candidate is: nobody scores their own findings.
   already fetched: `git diff {{integrationRef}}...HEAD`, and
   `git diff --name-only {{integrationRef}}...HEAD` for the file list. Read whole files, not just the
   diff, where your reading needs them. **Do not review from the diff alone**, and do not pretend a
-  file-reading step ran if you could not open the files.
+  file-reading step ran if you could not open the files: say so in `uncertain`, naming the file and
+  why it could not be read.
 - **The dispatch file** `{{dispatchFile}}`, JSON. Its `issue` holds the issue (`number`, `title`,
-  `body`, and the `comments` of trusted authors); the acceptance criteria are the numbered or
+  `body` and its `comments`); the acceptance criteria are the numbered or
   checkbox items under a heading containing "Acceptance criteria" in its `body`. Its
   `projectFacts.projectMd` is the project's `.autoclaude/project.md`, and `priorPullRequests` holds
   earlier pull requests where a reading needs them.
@@ -85,13 +86,14 @@ the column rather than a list of ids kept in two places.
 
 ## You cannot run an experiment, so do not plan on one
 
-The command guard refuses inline programs (`node -e` and its kind), and it refuses running a file you
-chose: a file you chose is a program you could have written. What you can run is the project's test
-command on one file, when a finding depends on what that file does: most test commands take a file
-path and run that file alone, but the command is the project's and so is its argument syntax, so read
-what it says when it refuses rather than guessing at a second form. **Do not run the whole suite.**
-The implementer ran it as a gate before you were dispatched and CI runs it again on the pull request,
-so a third run tells nobody anything and spends the stage's clock.
+A reading runs read-only. Read and search files with your file-reading and search tools, not with
+shell commands such as `cat`, `grep` or `find`; the commands it may run are git's reading commands
+(`git diff`, `git log`, `git show`, `git blame` and their kind) and a few harmless ones such as `ls`
+and `pwd`. No test command, no gate, no inline program and no file you chose runs here: a file you
+chose is a program you could have written. A denied command is the fence speaking: do not retry it
+or look for another way to the same effect. **You run no tests.** The implementer ran the suite as a
+gate before you were dispatched, the engine runs the red step itself, and CI runs the suite again on
+the pull request.
 
 Everything else is read. A boundary you would like to find by calling a function is found in its
 source instead, and a quotable line still scores 9. A finding you would have to execute to believe

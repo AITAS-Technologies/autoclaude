@@ -25,6 +25,12 @@ This process holds no forge credential and needs none. Never fetch, pull or push
 forge's command-line tool, and never ask for or set up a login. You write no file and you change
 nothing.
 
+This stage runs read-only. Read and search files with your file-reading and search tools, not with
+shell commands such as `cat`, `grep` or `find`; the commands it may run are git's reading commands
+(`git log`, `git show`, `git diff`, `git blame` and their kind) and a few harmless ones such as `ls`
+and `pwd`. A denied command is the fence speaking: do not retry it or look for another way to the
+same effect.
+
 ## Scoring
 
 For each candidate, open the plan line it quotes and, where it is about the code, the code line too,
