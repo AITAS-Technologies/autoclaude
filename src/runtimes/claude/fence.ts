@@ -157,26 +157,28 @@ const PLAN_SAMPLE = ".autoclaude/state/plans/1.md";
 
 /**
  * What a forbidden glob that covers the report and plan paths (the example `.autoclaude/**`)
- * becomes instead. A deny rule beats an allow rule, so the glob is split: the files directly
- * under `.autoclaude/` (the committed config) and under `.autoclaude/state/` stay denied, and
- * so does every other subdirectory present now; `state/reports` and `state/plans` stay
- * writable. Publish's forbidden-path diff check remains the backstop for anything committed.
+ * becomes instead. A deny rule beats an allow rule, so the glob is split: every file and every
+ * other subdirectory present now under `.autoclaude/` (the committed config) and under
+ * `.autoclaude/state/` stays denied; `state/reports` and `state/plans` stay writable.
+ *
+ * No `*` rule: Claude Code refuses a path when a deny rule matches any directory above it
+ * ("File is in a directory that is denied", claude 2.1.301), so `.autoclaude/*` would match
+ * `state/` and deny the reports with it. A file created later under `.autoclaude/` is not
+ * fenced; publish's forbidden-path diff check remains the backstop for anything committed.
  */
 function reportCarveOut(worktree: string): string[] {
-  const dirs = (rel: string, keep: string[]): string[] => {
+  const entries = (rel: string, keep: string[]): string[] => {
     try {
       return readdirSync(join(worktree, rel), { withFileTypes: true })
-        .filter((d) => d.isDirectory() && !keep.includes(d.name))
-        .map((d) => `${rel}/${d.name}/**`);
+        .filter((d) => !keep.includes(d.name))
+        .map((d) => (d.isDirectory() ? `${rel}/${d.name}/**` : `${rel}/${d.name}`));
     } catch {
       return [];
     }
   };
   return [
-    ".autoclaude/*",
-    ".autoclaude/state/*",
-    ...dirs(".autoclaude", ["state"]),
-    ...dirs(".autoclaude/state", ["reports", "plans"]),
+    ...entries(".autoclaude", ["state"]),
+    ...entries(".autoclaude/state", ["reports", "plans"]),
   ];
 }
 
