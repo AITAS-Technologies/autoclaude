@@ -24,7 +24,9 @@ autoclaude reached **1 of 11 (must 0/2, should 1/4)**.
 - every run can be followed live and reconstructed afterwards;
 - the limit on parallel runs holds per local clone, not per repository;
 - every pull request is opened as a draft;
-- nothing is left lying around.
+- nothing is left lying around;
+- everything is documented well, above all how a developer uses autoclaude on their own
+  repository.
 
 ## 2. What the benchmark run shows
 
@@ -356,6 +358,50 @@ cost totals and MCP use, with a link to nothing local. The body stays publish's 
   whatever the CLI maps it to that day. The output records what each process and subagent
   actually ran on, and that is the comparison's basis.
 
+### 3.10 User documentation (owner)
+
+Everything is documented well, above all **how a developer uses autoclaude on their own
+repository**.
+
+**Who it is for.** A developer who has never seen the source pipeline: they clone autoclaude,
+point it at their own repository, and run issues on their own Claude or Codex subscription. It is
+written in English, like the repository.
+
+**What it consists of** (designer's call on the structure):
+
+| File                             | Answers                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `README.md`                      | What autoclaude is, the chain in one picture, prerequisites, install, a ten-minute quickstart to a first draft pull request, links into the guide                                                                                                                                                                                                                                                                                                         |
+| `docs/guide/install.md`          | Prerequisites per OS (Node, git, `gh`, Git Bash on Windows, the runtime CLIs and their logins); clone, build and link; `doctor`; update; uninstall                                                                                                                                                                                                                                                                                                        |
+| `docs/guide/onboarding.md`       | `init`; every file in `.autoclaude/` and what it is for; writing `config.json` (gates, red step, labels, stages and models), with **complete example configurations for at least two stacks** (TypeScript with npm, Python with pytest); `invariants.md` with its row grammar and example rows; `project.md`'s six headings and "absent means not applicable"; `config.local.json` and which values are personal; creating the labels; the first `doctor` |
+| `docs/guide/writing-issues.md`   | What an issue an agent can work from looks like: problem, checkable criteria, scope, with good and bad examples; what triage checks; the priority, ready and automerge labels                                                                                                                                                                                                                                                                             |
+| `docs/guide/running-an-issue.md` | `autoclaude issue <n>`: the entry gate; the chain stage by stage with its rounds; the parallel-run limit and its prompt; `--detach`, `--force` and `--wait`; what ends a run; the draft pull request and what the human does next                                                                                                                                                                                                                         |
+| `docs/guide/following-a-run.md`  | `watch` and its tree; the events log and every line type; `status` and "Waiting for you"; the run report, field by field; the pull-request summary                                                                                                                                                                                                                                                                                                        |
+| `docs/guide/reviews.md`          | How the code review works (lead, angles, scorer, models); how a finding becomes must, should, later or uncertain; red-step verdicts; fix rounds; `review --pr`; `bench`                                                                                                                                                                                                                                                                                   |
+| `docs/guide/stages.md`           | Each stage skill: what it does, its inputs and outputs, its subagents and models, and where its text lives                                                                                                                                                                                                                                                                                                                                                |
+| `docs/guide/housekeeping.md`     | `clean` and retention; where worktrees and state live; `rollback`; `pause`, `drain` and `resume`                                                                                                                                                                                                                                                                                                                                                          |
+| `docs/guide/troubleshooting.md`  | `doctor` failures; denied commands and how to extend `fence.allow`; usage limits; CI that never starts; stale claims; Windows specifics (Git Bash, paths with spaces); recovering after a crash or reboot                                                                                                                                                                                                                                                 |
+| `docs/reference/cli.md`          | Every verb, its flags and its exit codes                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `docs/reference/config.md`       | Every key: type, default, and whether it is committed or personal (replaces today's `docs/config.md`)                                                                                                                                                                                                                                                                                                                                                     |
+| `docs/reference/events.md`       | Every events-log line type                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `docs/reference/run-report.md`   | The schema of `run-report.json`                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `docs/security.md`               | The fence layers, the stage environment and the residual risk, kept current                                                                                                                                                                                                                                                                                                                                                                               |
+
+**The documentation cannot fall behind the code.** These are tests in the suite:
+
+- every verb and flag the CLI accepts appears in `docs/reference/cli.md`;
+- every config key in the schema appears in `docs/reference/config.md`;
+- every event type the engine writes appears in `docs/reference/events.md`;
+- every field of `run-report.json` appears in `docs/reference/run-report.md`;
+- every relative link in `README.md` and `docs/` resolves;
+- every `autoclaude` command in the README quickstart and the guide names a verb and flags that
+  exist;
+- the two example configurations in the onboarding guide load without error.
+
+**And a rule for every change** (owner): a pull request that adds or changes a verb, a flag, a
+config key, an event, a stage's behaviour or a default updates the documentation in the same pull
+request.
+
 ## 4. Acceptance
 
 1. **Benchmark** (designer's calls on what "like for like" pins):
@@ -379,6 +425,11 @@ cost totals and MCP use, with a link to nothing local. The body stays publish's 
    the plan ↔ plan-review loop count and every MCP tool called.
 7. **Cleanup:** `clean --dry-run` lists exactly the orphaned worktrees and expired run directories,
    and no run report.
+8. **Documentation:**
+   - every file of § 3.10 exists, and its documentation tests are green;
+   - the owner follows only the README and the guide on Windows, from a fresh clone of autoclaude
+     to a first draft pull request on a project that has never used it;
+   - every point where the documents did not suffice is fixed before Phase 1b closes.
 
 ## 5. Order of work (designer's call)
 
@@ -390,7 +441,11 @@ This amendment is **Phase 1b**, before the main design's Phase 2:
    pull requests (§ 3.3, § 3.4, § 3.6);
 4. review worktrees (§ 3.5);
 5. logging (§ 3.7);
-6. cleanup (§ 3.8).
+6. cleanup (§ 3.8);
+7. the documentation pass and acceptance 8 (§ 3.10).
+
+Each of steps 1–6 already updates the documents it touches, under § 3.10's rule; step 7 completes
+the guide and walks through it.
 
 The main design's Phase 2 (budget, daily triage, the queue, notifications) becomes the orchestrator
 phase built on these runs.
@@ -413,7 +468,7 @@ phase built on these runs.
 - **§ 12**: publish opens drafts; auto-merge marks ready before merging (§ 3.6).
 - **§ 14**: new or changed verbs: `issue <n> [--detach] [--force|--wait]`, `report <issue>`,
   `clean`, `check-rebased`, and `bench --base/--head`.
-- **§ 15**: Phase 1b as in § 5.
+- **§ 15**: Phase 1b as in § 5, including the user documentation of § 3.10.
 - **§ 17**: the prompt templating mechanism and the lead question are decided by § 3.1–3.2.
 
 ## 7. Left to the builder
